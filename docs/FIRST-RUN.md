@@ -21,12 +21,14 @@ The guided setup asks for:
 - which services they use, defaulting to Atlassian, Salesforce, Dovetail, and Slack
 - what they actually do in each selected service
 - which workflows those services support
+- whether recurring review / heartbeat behavior should be enabled and how quiet it should be
 - whether Git and GitHub should be connected immediately after setup
 
 ## What The Installer Creates
 
 - a personalized `90 Ops/First Run.md`
 - a `90 Ops/Service Map.md` that grounds the workflows in real systems
+- a personalized heartbeat policy for recurring review
 - source-of-truth workflow definitions under `90 Ops/Agents/`
 - platform-specific agent scaffolds in the right format
 - an `Agent Setup Tutorial` project with concrete next steps

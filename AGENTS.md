@@ -69,3 +69,10 @@ Use these properties where relevant:
 - If unsure where something goes, put it in `00 Inbox/`.
 - If creating a new project, start from the project template or the standard project structure.
 - If cleaning up, reduce duplication and improve clarity without changing meaning.
+
+## Recurring Review
+
+- Recurring review and away-from-user check-in behavior lives in `HEARTBEAT.md`.
+- Keep recurring review lightweight and quiet by default.
+- Use recurring review to keep active work moving and project state resumable.
+- Do not use recurring review for noisy churn or major unsupervised work.

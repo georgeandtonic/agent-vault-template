@@ -6,6 +6,7 @@ This repository gives users:
 
 - a blank vault structure
 - a first-run installer
+- a root operating contract and recurring-review policy
 - platform-aware agent templates for OpenClaw, Claude Code, Codex-style skills, and ChatGPT custom GPTs
 - a tutorial project that helps them connect the systems they actually use
 - a post-setup Git and GitHub bootstrap flow
@@ -34,6 +35,7 @@ The installer will:
 - ask which agent platform(s) the user wants to use
 - ask for two workflows to turn into starter agents
 - ask which services they use and how those services map to the workflows
+- ask whether recurring review / heartbeat behavior should be enabled
 - scaffold platform-specific agent definitions in the right format
 - initialize Git and create the first commit
 - optionally create or connect a GitHub repo after setup, with existing-repo selection via `gh` when available

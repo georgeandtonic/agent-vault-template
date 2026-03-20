@@ -1,0 +1,24 @@
+# HEARTBEAT.md
+
+On each heartbeat, do a lightweight review for the `__WORKFLOW_TITLE__` workflow centered on the shared office:
+
+`__VAULT_PATH__`
+
+Cadence:
+- __HEARTBEAT_CADENCE__
+
+Primary goal:
+- keep this workflow moving
+- keep shared state clean enough that the next session can resume quickly
+
+Look for:
+- work with no clear next action
+- blocked or waiting items that need surfacing
+- stale workflow notes
+- obvious documentation gaps that would slow future sessions
+
+Guidelines:
+- Be quiet by default.
+- If nothing important needs action, do not create noise.
+- Prefer lightweight review over deep work.
+- Only message the user when human input is actually needed.

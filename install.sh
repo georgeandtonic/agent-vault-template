@@ -186,6 +186,88 @@ append_workflow_context() {
   done
 }
 
+write_repo_heartbeat() {
+  cat > "$VAULT_DIR/HEARTBEAT.md" <<EOF
+# HEARTBEAT.md
+
+This file defines the recurring review policy for this vault.
+
+Cadence:
+- $HEARTBEAT_CADENCE
+
+Quiet mode:
+- $HEARTBEAT_QUIET
+
+$(if [[ "$HEARTBEAT_ENABLED" == "yes" ]]; then printf '%s\n' "Recurring review is enabled."; else printf '%s\n' "Recurring review is currently disabled. Keep this file as the policy reference and enable it later when ready."; fi)
+
+On each recurring check-in:
+
+- review active projects in \`01 Projects/\`
+- check \`00 Inbox/\` for items that should move into projects or areas
+- inspect \`90 Ops/Work Queue.md\` when it exists
+- look for stale status, unclear next actions, blockers, and missing handoffs
+
+Guidelines:
+
+- Be quiet by default.
+- Prefer lightweight review over deep work.
+- Only interrupt the user when input is actually needed.
+- Avoid noisy maintenance and repetitive edits.
+- Update durable notes only when it materially improves future work.
+EOF
+}
+
+write_heartbeat_config() {
+  cat > "$VAULT_DIR/90 Ops/Heartbeat Config.md" <<EOF
+# Heartbeat Config
+
+## Purpose
+
+Define how recurring review should work when the user is away.
+
+## Status
+
+- enabled: $HEARTBEAT_ENABLED
+- cadence: $HEARTBEAT_CADENCE
+- quiet mode: $HEARTBEAT_QUIET
+
+## Review Targets
+
+- \`00 Inbox/\`
+- \`01 Projects/\`
+- \`90 Ops/Work Queue.md\` when present
+- recent logs and decisions only when needed
+
+## Review Goals
+
+- keep active work moving
+- surface blockers or stale work
+- keep project state resumable
+- avoid noisy churn
+EOF
+}
+
+write_openclaw_heartbeat() {
+  local target_path="$1"
+  local workflow_title="$2"
+  local workflow_slug="$3"
+  local escaped_title
+  local escaped_slug
+  local escaped_vault_path
+  local escaped_cadence
+  escaped_title="$(escape_sed_replacement "$workflow_title")"
+  escaped_slug="$(escape_sed_replacement "$workflow_slug")"
+  escaped_vault_path="$(escape_sed_replacement "$VAULT_DIR")"
+  escaped_cadence="$(escape_sed_replacement "$HEARTBEAT_CADENCE")"
+  ensure_dir "$(dirname "$target_path")"
+  sed \
+    -e "s|__WORKFLOW_TITLE__|$escaped_title|g" \
+    -e "s|__WORKFLOW_SLUG__|$escaped_slug|g" \
+    -e "s|__VAULT_PATH__|$escaped_vault_path|g" \
+    -e "s|__HEARTBEAT_CADENCE__|$escaped_cadence|g" \
+    "$TEMPLATES_DIR/openclaw/HEARTBEAT.md.template" > "$target_path"
+}
+
 configure_git_identity_if_needed() {
   local current_name
   local current_email
@@ -386,6 +468,20 @@ while [[ $i -lt $SERVICE_COUNT ]]; do
   i=$((i + 1))
 done
 
+if prompt_yes_no "Enable recurring review / heartbeat guidance?" "y"; then
+  HEARTBEAT_ENABLED="yes"
+  HEARTBEAT_CADENCE="$(prompt_default "Recurring review cadence" "weekday-daily")"
+  if prompt_yes_no "Keep recurring review quiet unless action is needed?" "y"; then
+    HEARTBEAT_QUIET="yes"
+  else
+    HEARTBEAT_QUIET="no"
+  fi
+else
+  HEARTBEAT_ENABLED="no"
+  HEARTBEAT_CADENCE="manual"
+  HEARTBEAT_QUIET="yes"
+fi
+
 VAULT_DIR="$ROOT_DIR"
 AGENT_SOURCE_DIR="$VAULT_DIR/90 Ops/Agents"
 TUTORIAL_DIR="$VAULT_DIR/01 Projects/Agent Setup Tutorial"
@@ -395,6 +491,9 @@ ensure_dir "$AGENT_SOURCE_DIR/Claude Code"
 ensure_dir "$AGENT_SOURCE_DIR/Codex Skills"
 ensure_dir "$AGENT_SOURCE_DIR/ChatGPT GPTs"
 ensure_dir "$TUTORIAL_DIR"
+
+write_repo_heartbeat
+write_heartbeat_config
 
 cat > "$VAULT_DIR/90 Ops/First Run.md" <<EOF
 # First Run
@@ -435,6 +534,12 @@ $(printf -- '- %s\n' "${PLATFORMS[@]}")
 ## Service Layer
 
 $(i=0; while [[ $i -lt $SERVICE_COUNT ]]; do printf -- '- %s: %s (workflow %s)\n' "${SERVICE_NAMES[$i]}" "${SERVICE_USES[$i]}" "${SERVICE_WORKFLOW_MAPS[$i]}"; i=$((i + 1)); done)
+
+## Recurring Review
+
+- enabled: $HEARTBEAT_ENABLED
+- cadence: $HEARTBEAT_CADENCE
+- quiet mode: $HEARTBEAT_QUIET
 
 ## Git And GitHub
 
@@ -535,6 +640,7 @@ cat > "$TUTORIAL_DIR/tasks.md" <<EOF
 EOF
 append_task "$TUTORIAL_DIR/tasks.md" "Read \`90 Ops/First Run.md\`."
 append_task "$TUTORIAL_DIR/tasks.md" "Review \`90 Ops/Service Map.md\` and correct anything too vague."
+append_task "$TUTORIAL_DIR/tasks.md" "Review \`HEARTBEAT.md\` and \`90 Ops/Heartbeat Config.md\`."
 append_task "$TUTORIAL_DIR/tasks.md" "Choose which workflow should become the first fully usable agent."
 
 printf '\n## Services\n\n' >> "$TUTORIAL_DIR/tasks.md"
@@ -549,6 +655,10 @@ append_task "$TUTORIAL_DIR/tasks.md" "Initialize Git if needed."
 append_task "$TUTORIAL_DIR/tasks.md" "Create the initial setup commit."
 append_task "$TUTORIAL_DIR/tasks.md" "Create or connect the GitHub repo."
 
+printf '\n## Recurring Review\n\n' >> "$TUTORIAL_DIR/tasks.md"
+append_task "$TUTORIAL_DIR/tasks.md" "Confirm the recurring review cadence and quiet-mode settings."
+append_task "$TUTORIAL_DIR/tasks.md" "Choose how the recurring review mechanism will actually run on the selected platform(s)."
+
 printf '\n## Validation\n\n' >> "$TUTORIAL_DIR/tasks.md"
 append_task "$TUTORIAL_DIR/tasks.md" "Run one real task through the first workflow agent."
 append_task "$TUTORIAL_DIR/tasks.md" "Record what the agent needed but did not have."
@@ -560,6 +670,7 @@ cat > "$TUTORIAL_DIR/log.md" <<EOF
 - Setup initialized for $USER_NAME.
 - Platforms selected: $(printf '%s' "${PLATFORMS[*]}")
 - Services selected: $(printf '%s ' "${SERVICE_NAMES[@]}")
+- Recurring review enabled: $HEARTBEAT_ENABLED
 EOF
 
 cat > "$TUTORIAL_DIR/decisions.md" <<EOF
@@ -568,6 +679,7 @@ cat > "$TUTORIAL_DIR/decisions.md" <<EOF
 - This vault will be used as the durable operating layer for agent work.
 - Agents should be defined around repeatable workflows before expanding into more specialized roles.
 - Service usage should shape agent prompts so they are grounded in real work rather than abstract roles.
+- Recurring review should stay lightweight and quiet by default.
 EOF
 
 create_openclaw_sources() {
@@ -589,6 +701,7 @@ create_openclaw_sources() {
     "$title" \
     "$slug" \
     "$VAULT_DIR"
+  write_openclaw_heartbeat "$source_root/HEARTBEAT.md" "$title" "$slug"
 }
 
 create_claude_sources() {
@@ -644,8 +757,10 @@ for platform in "${PLATFORMS[@]}"; do
         ensure_dir "$OPENCLAW_ROOT/$WORKFLOW_2_SLUG"
         cp "$AGENT_SOURCE_DIR/OpenClaw/$WORKFLOW_1_SLUG/AGENTS.md" "$OPENCLAW_ROOT/$WORKFLOW_1_SLUG/AGENTS.md"
         cp "$AGENT_SOURCE_DIR/OpenClaw/$WORKFLOW_1_SLUG/BOOTSTRAP.md" "$OPENCLAW_ROOT/$WORKFLOW_1_SLUG/BOOTSTRAP.md"
+        cp "$AGENT_SOURCE_DIR/OpenClaw/$WORKFLOW_1_SLUG/HEARTBEAT.md" "$OPENCLAW_ROOT/$WORKFLOW_1_SLUG/HEARTBEAT.md"
         cp "$AGENT_SOURCE_DIR/OpenClaw/$WORKFLOW_2_SLUG/AGENTS.md" "$OPENCLAW_ROOT/$WORKFLOW_2_SLUG/AGENTS.md"
         cp "$AGENT_SOURCE_DIR/OpenClaw/$WORKFLOW_2_SLUG/BOOTSTRAP.md" "$OPENCLAW_ROOT/$WORKFLOW_2_SLUG/BOOTSTRAP.md"
+        cp "$AGENT_SOURCE_DIR/OpenClaw/$WORKFLOW_2_SLUG/HEARTBEAT.md" "$OPENCLAW_ROOT/$WORKFLOW_2_SLUG/HEARTBEAT.md"
       fi
       ;;
     claude)
