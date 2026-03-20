@@ -8,6 +8,7 @@ This repository gives users:
 - a first-run installer
 - platform-aware agent templates for OpenClaw, Claude Code, Codex-style skills, and ChatGPT custom GPTs
 - a tutorial project that helps them connect the systems they actually use
+- a post-setup Git and GitHub bootstrap flow
 
 ## Recommended Setup
 
@@ -24,13 +25,17 @@ The installer will:
 - explain what the vault is for
 - ask which agent platform(s) the user wants to use
 - ask for two workflows to turn into starter agents
+- ask which services they use and how those services map to the workflows
 - scaffold platform-specific agent definitions in the right format
+- initialize Git and create the first commit
+- optionally create or connect a GitHub repo after setup
 - create a tutorial project for connecting tools and finishing setup
 
 ## What Gets Created
 
 - core vault folders
 - `90 Ops/First Run.md`
+- `90 Ops/Service Map.md`
 - `01 Projects/Agent Setup Tutorial/`
 - `90 Ops/Agents/` with source templates for the chosen platforms
 - optional live installs for Claude Code, OpenClaw, and Codex-compatible skills
