@@ -14,7 +14,15 @@ This repository gives users:
 
 1. Create a new repository from this template on GitHub.
 2. Clone it locally, ideally somewhere under `~/Documents`.
-3. Run:
+3. Start setup in one of these ways:
+
+Double-click in Finder on macOS:
+
+```bash
+setup.command
+```
+
+Or run in Terminal:
 
 ```bash
 ./install.sh
