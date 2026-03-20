@@ -28,7 +28,7 @@ The installer will:
 - ask which services they use and how those services map to the workflows
 - scaffold platform-specific agent definitions in the right format
 - initialize Git and create the first commit
-- optionally create or connect a GitHub repo after setup
+- optionally create or connect a GitHub repo after setup, with existing-repo selection via `gh` when available
 - create a tutorial project for connecting tools and finishing setup
 
 ## What Gets Created

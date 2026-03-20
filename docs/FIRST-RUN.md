@@ -30,7 +30,7 @@ The guided setup asks for:
 - source-of-truth workflow definitions under `90 Ops/Agents/`
 - platform-specific agent scaffolds in the right format
 - an `Agent Setup Tutorial` project with concrete next steps
-- an initial Git commit and optional GitHub remote setup
+- an initial Git commit and optional GitHub remote setup, including existing-repo selection when `gh` is available
 
 ## Why Two Workflows
 

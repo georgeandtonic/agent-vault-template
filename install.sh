@@ -74,6 +74,41 @@ github_cli_authenticated() {
   gh auth status >/dev/null 2>&1
 }
 
+github_repo_picker() {
+  local repo_lines
+  local repo_names=()
+  local line
+  local index=1
+  local choice
+
+  repo_lines="$(gh repo list --limit 100 --json nameWithOwner --jq '.[].nameWithOwner' 2>/dev/null || true)"
+  if [[ -z "$repo_lines" ]]; then
+    printf ''
+    return
+  fi
+
+  echo "Select an existing GitHub repo:"
+  while IFS= read -r line; do
+    if [[ -n "$line" ]]; then
+      repo_names+=("$line")
+      printf '%s. %s\n' "$index" "$line"
+      index=$((index + 1))
+    fi
+  done <<< "$repo_lines"
+
+  if [[ ${#repo_names[@]} -eq 0 ]]; then
+    printf ''
+    return
+  fi
+
+  read -r -p "Existing repo number or owner/repo: " choice
+  if [[ "$choice" =~ ^[0-9]+$ ]] && (( choice >= 1 && choice <= ${#repo_names[@]} )); then
+    printf '%s' "${repo_names[$((choice - 1))]}"
+  else
+    printf '%s' "$choice"
+  fi
+}
+
 workflow_number_for_name() {
   local input
   input="$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')"
@@ -236,7 +271,14 @@ setup_github_remote() {
     existing)
       local repo_full_name
       local remote_url
-      repo_full_name="$(prompt_required "Existing GitHub repo (owner/repo)")"
+      if command_exists gh && github_cli_authenticated; then
+        repo_full_name="$(github_repo_picker)"
+      else
+        repo_full_name=""
+      fi
+      if [[ -z "$repo_full_name" ]]; then
+        repo_full_name="$(prompt_required "Existing GitHub repo (owner/repo)")"
+      fi
       remote_url="https://github.com/$repo_full_name.git"
       if [[ -n "$current_origin" ]]; then
         git -C "$VAULT_DIR" remote set-url origin "$remote_url"
