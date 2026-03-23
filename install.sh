@@ -440,9 +440,10 @@ cat <<'MSG'
 Let's create your first agents. Each one handles a specific,
 repeatable type of task — one job, done consistently.
 
-Think of something like: "every time I finish a client call,
-I need to write up a summary and log it in the CRM" — that's
-a great candidate for an agent.
+Think of something like: "every time we finish a sprint, I need
+to pull together a stakeholder update from Jira and summarize
+what shipped, what slipped, and why" — that's a great candidate
+for an agent.
 MSG
 echo
 
