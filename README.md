@@ -13,17 +13,7 @@ This repository gives users:
 
 ## Recommended Setup
 
-1. Create a new repository from this template on GitHub.
-2. Clone it locally, ideally somewhere under `~/Documents`.
-3. Start setup in one of these ways:
-
-Double-click in Finder on macOS:
-
-```bash
-setup.command
-```
-
-Or run in Terminal:
+Run the installer in Terminal:
 
 ```bash
 ./install.sh
@@ -33,10 +23,6 @@ The installer will:
 
 - explain what the vault is for
 - ask which agent platform(s) the user wants to use
-- ask for two workflows to turn into starter agents
-- ask which services they use and how those services map to the workflows
-- ask whether recurring review / heartbeat behavior should be enabled
-- scaffold platform-specific agent definitions in the right format
 - initialize Git and create the first commit
 - optionally create or connect a GitHub repo after setup, with existing-repo selection via `gh` when available
 - create a tutorial project for connecting tools and finishing setup
