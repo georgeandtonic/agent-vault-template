@@ -336,16 +336,32 @@ setup_atlassian() {
 
 
 setup_github() {
-  echo "GitHub requires a Personal Access Token."
+  echo "GitHub connects using the GitHub CLI (gh)."
   echo
-  echo "Steps:"
-  echo "  1. Go to https://github.com/settings/tokens"
-  echo "  2. Generate new token (classic)"
-  echo "  3. Select scopes: repo, read:org, read:user"
-  echo "  4. Copy the token"
-  echo
+
+  if ! command_exists gh; then
+    echo "The GitHub CLI is not installed."
+    echo "Install it from https://cli.github.com then re-run setup."
+    echo
+    if prompt_yes_no "Skip GitHub for now?" "y"; then
+      return
+    fi
+    return
+  fi
+
+  if ! gh auth status >/dev/null 2>&1; then
+    echo "You're not logged in to GitHub. Opening browser login now..."
+    echo
+    gh auth login
+  fi
+
   local token
-  token="$(prompt_secret "GitHub Personal Access Token (ghp_...)")"
+  token="$(gh auth token 2>/dev/null || true)"
+  if [[ -z "$token" ]]; then
+    echo "Could not retrieve GitHub token. Skipping."
+    return
+  fi
+
   mcp_add_github "$token"
   echo "GitHub added."
 }
