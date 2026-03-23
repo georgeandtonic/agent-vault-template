@@ -2,23 +2,29 @@
 
 set -euo pipefail
 
-ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-TEMPLATES_DIR="$ROOT_DIR/templates"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+TEMPLATES_DIR="$SCRIPT_DIR/templates"
+
+# ─────────────────────────────────────────────────────────────
+# Terminal helpers
+# ─────────────────────────────────────────────────────────────
+
+section() {
+  echo
+  echo "────────────────────────────────────────"
+  echo "  $1"
+  echo "────────────────────────────────────────"
+  echo
+}
 
 prompt_default() {
-  local label="$1"
-  local default_value="$2"
-  local value
-  read -r -p "$label [$default_value]: " value
-  if [[ -z "$value" ]]; then
-    value="$default_value"
-  fi
-  printf '%s' "$value"
+  local label="$1" default="$2" value
+  read -r -p "$label [$default]: " value
+  printf '%s' "${value:-$default}"
 }
 
 prompt_required() {
-  local label="$1"
-  local value=""
+  local label="$1" value=""
   while [[ -z "$value" ]]; do
     read -r -p "$label: " value
   done
@@ -26,24 +32,99 @@ prompt_required() {
 }
 
 prompt_yes_no() {
-  local label="$1"
-  local default_value="$2"
-  local value
-  read -r -p "$label [$default_value]: " value
-  value="${value:-$default_value}"
-  case "$value" in
-    y|Y|yes|YES) return 0 ;;
-    *) return 1 ;;
-  esac
+  local label="$1" default="${2:-y}" value
+  read -r -p "$label [${default}]: " value
+  value="${value:-$default}"
+  [[ "$value" =~ ^[Yy] ]]
 }
 
-prompt_choice() {
-  local label="$1"
-  local default_value="$2"
-  local value
-  read -r -p "$label [$default_value]: " value
-  printf '%s' "${value:-$default_value}"
+prompt_secret() {
+  local label="$1" value=""
+  while [[ -z "$value" ]]; do
+    read -r -s -p "$label: " value
+    echo
+  done
+  printf '%s' "$value"
 }
+
+# ─────────────────────────────────────────────────────────────
+# Multi-select: arrow keys to navigate, space to toggle, enter to confirm
+# Usage: multiselect RESULT_VAR "Option 1" "Option 2" ...
+#        RESULT_VAR becomes an array of selected option strings
+# ─────────────────────────────────────────────────────────────
+
+_ms_cursor=0
+_ms_count=0
+_ms_selected=()
+_ms_options=()
+
+_ms_draw() {
+  local i
+  for ((i=0; i<_ms_count; i++)); do
+    local pre="  " mark="[ ]"
+    [[ $i -eq $_ms_cursor ]] && pre=" >"
+    [[ ${_ms_selected[$i]} -eq 1 ]] && mark="[x]"
+    printf "\r%s %s  %s\n" "$pre" "$mark" "${_ms_options[$i]}"
+  done
+  # Move cursor back to top of list
+  printf "\033[%dA" "$_ms_count"
+}
+
+multiselect() {
+  local result_var="$1"
+  shift
+  _ms_options=("$@")
+  _ms_count=${#_ms_options[@]}
+  _ms_cursor=0
+  _ms_selected=()
+
+  local i
+  for ((i=0; i<_ms_count; i++)); do _ms_selected[$i]=0; done
+
+  tput civis 2>/dev/null || true
+  _ms_draw
+
+  while true; do
+    local key seq
+    IFS= read -rsn1 key
+    if [[ "$key" == $'\x1b' ]]; then
+      IFS= read -rsn2 -t 0.1 seq || seq=""
+      case "$seq" in
+        '[A') ((_ms_cursor > 0)) && ((_ms_cursor--)) || true ;;
+        '[B') ((_ms_cursor < _ms_count - 1)) && ((_ms_cursor++)) || true ;;
+      esac
+    elif [[ "$key" == ' ' ]]; then
+      if [[ ${_ms_selected[$_ms_cursor]} -eq 0 ]]; then
+        _ms_selected[$_ms_cursor]=1
+      else
+        _ms_selected[$_ms_cursor]=0
+      fi
+    elif [[ "$key" == '' ]]; then
+      break
+    fi
+    _ms_draw
+  done
+
+  # Move past the list and restore cursor
+  printf "\033[%dB\n" "$_ms_count"
+  tput cnorm 2>/dev/null || true
+
+  # Write selected items to result variable
+  local result=()
+  for ((i=0; i<_ms_count; i++)); do
+    [[ ${_ms_selected[$i]} -eq 1 ]] && result+=("${_ms_options[$i]}")
+  done
+
+  if [[ ${#result[@]} -gt 0 ]]; then
+    eval "${result_var}=($(printf '"%s" ' "${result[@]}"))"
+  else
+    eval "${result_var}=()"
+  fi
+}
+
+# ─────────────────────────────────────────────────────────────
+# Utilities
+# ─────────────────────────────────────────────────────────────
 
 slugify() {
   printf '%s' "$1" \
@@ -54,582 +135,494 @@ slugify() {
     | sed 's/-$//'
 }
 
-trim() {
-  printf '%s' "$1" | sed 's/^[[:space:]]*//' | sed 's/[[:space:]]*$//'
+trim() { printf '%s' "$1" | sed 's/^[[:space:]]*//' | sed 's/[[:space:]]*$//'; }
+
+ensure_dir() { mkdir -p "$1"; }
+
+escape_sed() { printf '%s' "$1" | sed 's/[&|\\]/\\&/g'; }
+
+command_exists() { command -v "$1" >/dev/null 2>&1; }
+
+append_task() {
+  printf -- "- [ ] %s\n" "$2" >> "$1"
 }
 
-ensure_dir() {
-  mkdir -p "$1"
-}
-
-escape_sed_replacement() {
-  printf '%s' "$1" | sed 's/[&|\\]/\\&/g'
-}
-
-command_exists() {
-  command -v "$1" >/dev/null 2>&1
-}
-
-github_cli_authenticated() {
-  gh auth status >/dev/null 2>&1
-}
-
-github_repo_picker() {
-  local repo_lines
-  local repo_names=()
-  local line
-  local index=1
-  local choice
-
-  repo_lines="$(gh repo list --limit 100 --json nameWithOwner --jq '.[].nameWithOwner' 2>/dev/null || true)"
-  if [[ -z "$repo_lines" ]]; then
-    printf ''
-    return
-  fi
-
-  echo "Select an existing GitHub repo:"
-  while IFS= read -r line; do
-    if [[ -n "$line" ]]; then
-      repo_names+=("$line")
-      printf '%s. %s\n' "$index" "$line"
-      index=$((index + 1))
-    fi
-  done <<< "$repo_lines"
-
-  if [[ ${#repo_names[@]} -eq 0 ]]; then
-    printf ''
-    return
-  fi
-
-  read -r -p "Existing repo number or owner/repo: " choice
-  if [[ "$choice" =~ ^[0-9]+$ ]] && (( choice >= 1 && choice <= ${#repo_names[@]} )); then
-    printf '%s' "${repo_names[$((choice - 1))]}"
-  else
-    printf '%s' "$choice"
-  fi
-}
-
-workflow_number_for_name() {
-  local input
-  input="$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')"
-  case "$input" in
-    1|workflow1|workflow-1|first|"${WORKFLOW_1_SLUG}") printf '1' ;;
-    2|workflow2|workflow-2|second|"${WORKFLOW_2_SLUG}") printf '2' ;;
-    both|all|1,2|2,1) printf 'both' ;;
-    *) printf '' ;;
-  esac
-}
-
-service_supports_workflow() {
-  local mapping="$1"
-  local workflow_number="$2"
-  case "$mapping" in
-    both|all|1,2|2,1) return 0 ;;
-    "$workflow_number") return 0 ;;
-    *) return 1 ;;
-  esac
-}
-
-write_file_from_template() {
-  local template_path="$1"
-  local target_path="$2"
-  local workflow_title="$3"
-  local workflow_slug="$4"
-  local vault_path="$5"
-  local escaped_title
-  local escaped_slug
-  local escaped_vault_path
-  escaped_title="$(escape_sed_replacement "$workflow_title")"
-  escaped_slug="$(escape_sed_replacement "$workflow_slug")"
-  escaped_vault_path="$(escape_sed_replacement "$vault_path")"
+write_from_template() {
+  local template_path="$1" target_path="$2"
   ensure_dir "$(dirname "$target_path")"
   sed \
-    -e "s|__WORKFLOW_TITLE__|$escaped_title|g" \
-    -e "s|__WORKFLOW_SLUG__|$escaped_slug|g" \
-    -e "s|__VAULT_PATH__|$escaped_vault_path|g" \
+    -e "s|__WORKFLOW_1_TITLE__|$(escape_sed "$WORKFLOW_1_TITLE")|g" \
+    -e "s|__WORKFLOW_2_TITLE__|$(escape_sed "$WORKFLOW_2_TITLE")|g" \
+    -e "s|__WORKFLOW_1_SLUG__|$(escape_sed "$WORKFLOW_1_SLUG")|g" \
+    -e "s|__WORKFLOW_2_SLUG__|$(escape_sed "$WORKFLOW_2_SLUG")|g" \
+    -e "s|__USER_NAME__|$(escape_sed "$USER_NAME")|g" \
+    -e "s|__VAULT_PATH__|$(escape_sed "$VAULT_DIR")|g" \
     "$template_path" > "$target_path"
 }
 
-append_task() {
-  local file_path="$1"
-  local task_text="$2"
-  printf -- "- [ ] %s\n" "$task_text" >> "$file_path"
+# ─────────────────────────────────────────────────────────────
+# MCP config builders
+# ─────────────────────────────────────────────────────────────
+
+MCP_ENTRIES=()
+
+mcp_add_atlassian() {
+  MCP_ENTRIES+=('    "Atlassian": {
+      "command": "npx",
+      "args": ["mcp-remote@latest", "https://mcp.atlassian.com/v1/mcp"]
+    }')
 }
 
-append_workflow_context() {
-  local file_path="$1"
-  local workflow_title="$2"
-  local workflow_summary="$3"
-  local workflow_number="$4"
-  local service_count="$5"
-  local i=0
+mcp_add_notion() {
+  MCP_ENTRIES+=('    "Notion": {
+      "type": "http",
+      "url": "https://mcp.notion.com/mcp"
+    }')
+}
 
-  {
-    printf '\n## Workflow Context\n\n'
-    printf 'Summary: %s\n' "$workflow_summary"
-    printf '\nConnected services:\n'
-  } >> "$file_path"
+mcp_add_salesforce() {
+  local org_alias="$1"
+  MCP_ENTRIES+=("    \"Salesforce\": {
+      \"command\": \"npx\",
+      \"args\": [\"-y\", \"@salesforce/mcp\", \"--orgs\", \"$org_alias\", \"--toolsets\", \"orgs,metadata,data,users\"]
+    }")
+}
 
-  if [[ "$service_count" -eq 0 ]]; then
-    printf -- '- none selected yet\n' >> "$file_path"
-    return
+mcp_add_slack() {
+  local bot_token="$1" team_id="$2"
+  MCP_ENTRIES+=("    \"Slack\": {
+      \"command\": \"npx\",
+      \"args\": [\"-y\", \"@modelcontextprotocol/server-slack\"],
+      \"env\": {
+        \"SLACK_BOT_TOKEN\": \"$bot_token\",
+        \"SLACK_TEAM_ID\": \"$team_id\"
+      }
+    }")
+}
+
+mcp_add_github() {
+  local token="$1"
+  MCP_ENTRIES+=("    \"GitHub\": {
+      \"command\": \"npx\",
+      \"args\": [\"-y\", \"@modelcontextprotocol/server-github\"],
+      \"env\": {
+        \"GITHUB_PERSONAL_ACCESS_TOKEN\": \"$token\"
+      }
+    }")
+}
+
+write_mcp_json() {
+  if [[ ${#MCP_ENTRIES[@]} -eq 0 ]]; then return; fi
+
+  local out i
+  out='{\n  "mcpServers": {\n'
+  for ((i=0; i<${#MCP_ENTRIES[@]}; i++)); do
+    out+="${MCP_ENTRIES[$i]}"
+    [[ $i -lt $((${#MCP_ENTRIES[@]} - 1)) ]] && out+=","
+    out+="\n"
+  done
+  out+='  }\n}'
+  printf '%b' "$out" > "$VAULT_DIR/.mcp.json"
+}
+
+# ─────────────────────────────────────────────────────────────
+# Tool setup wizards
+# ─────────────────────────────────────────────────────────────
+
+setup_atlassian() {
+  echo "Atlassian connects to Jira and Confluence using OAuth."
+  echo "No token is needed right now — when Claude first uses this tool,"
+  echo "a browser window will open so you can log in to your Atlassian account."
+  echo
+  if ! command_exists npx; then
+    echo "Note: npx (Node.js) is required. Install from https://nodejs.org"
+  fi
+  mcp_add_atlassian
+  echo "Atlassian added."
+}
+
+setup_notion() {
+  echo "Notion connects via OAuth."
+  echo "When Claude first uses this tool it will prompt you to authenticate"
+  echo "through your browser. No token needed right now."
+  echo
+  mcp_add_notion
+  echo "Notion added."
+}
+
+setup_salesforce() {
+  echo "Salesforce uses the Salesforce CLI to connect to your org."
+  echo
+
+  if ! command_exists sf && ! command_exists sfdx; then
+    echo "Salesforce CLI not found on this machine."
+    echo "Install it from: https://developer.salesforce.com/tools/salesforcecli"
+    echo
+    if ! prompt_yes_no "Configure Salesforce anyway (you can authenticate the CLI later)?" "y"; then
+      echo "Skipping Salesforce."
+      return
+    fi
+  else
+    echo "Salesforce CLI found. Authenticated orgs:"
+    sf org list --json 2>/dev/null \
+      | grep '"alias"' \
+      | sed 's/.*"alias": "\(.*\)".*/  - \1/' \
+      || echo "  (none — run 'sf org login web' to authenticate)"
+    echo
   fi
 
-  while [[ $i -lt $service_count ]]; do
-    local service_name="${SERVICE_NAMES[$i]}"
-    local service_use="${SERVICE_USES[$i]}"
-    local service_mapping="${SERVICE_WORKFLOW_MAPS[$i]}"
-    if service_supports_workflow "$service_mapping" "$workflow_number"; then
-      printf -- '- %s: %s\n' "$service_name" "$service_use" >> "$file_path"
-    fi
-    i=$((i + 1))
-  done
+  local org_alias
+  org_alias="$(prompt_required "Org alias to connect (e.g. production, staging, dev)")"
+  mcp_add_salesforce "$org_alias"
+  echo "Salesforce added with org: $org_alias"
 }
 
-write_repo_heartbeat() {
-  cat > "$VAULT_DIR/HEARTBEAT.md" <<EOF
-# HEARTBEAT.md
-
-This file defines the recurring review policy for this vault.
-
-Cadence:
-- $HEARTBEAT_CADENCE
-
-Quiet mode:
-- $HEARTBEAT_QUIET
-
-$(if [[ "$HEARTBEAT_ENABLED" == "yes" ]]; then printf '%s\n' "Recurring review is enabled."; else printf '%s\n' "Recurring review is currently disabled. Keep this file as the policy reference and enable it later when ready."; fi)
-
-On each recurring check-in:
-
-- review active projects in \`01 Projects/\`
-- check \`00 Inbox/\` for items that should move into projects or areas
-- inspect \`90 Ops/Work Queue.md\` when it exists
-- look for stale status, unclear next actions, blockers, and missing handoffs
-
-Guidelines:
-
-- Be quiet by default.
-- Prefer lightweight review over deep work.
-- Only interrupt the user when input is actually needed.
-- Avoid noisy maintenance and repetitive edits.
-- Update durable notes only when it materially improves future work.
-EOF
+setup_slack() {
+  echo "Slack requires a Bot Token from a Slack app you create."
+  echo
+  echo "Steps:"
+  echo "  1. Go to https://api.slack.com/apps → Create New App → From scratch"
+  echo "  2. Under OAuth & Permissions, add these Bot Token Scopes:"
+  echo "       channels:history  channels:read  chat:write"
+  echo "       groups:read  im:read  mpim:read  users:read"
+  echo "  3. Click 'Install to Workspace'"
+  echo "  4. Copy the Bot User OAuth Token (starts with xoxb-)"
+  echo "  5. Find your Team ID in workspace settings (starts with T)"
+  echo
+  local bot_token team_id
+  bot_token="$(prompt_secret "Slack Bot Token (xoxb-...)")"
+  team_id="$(prompt_required "Slack Team ID (T...)")"
+  mcp_add_slack "$bot_token" "$team_id"
+  echo "Slack added."
 }
 
-write_heartbeat_config() {
-  cat > "$VAULT_DIR/90 Ops/Heartbeat Config.md" <<EOF
-# Heartbeat Config
-
-## Purpose
-
-Define how recurring review should work when the user is away.
-
-## Status
-
-- enabled: $HEARTBEAT_ENABLED
-- cadence: $HEARTBEAT_CADENCE
-- quiet mode: $HEARTBEAT_QUIET
-
-## Review Targets
-
-- \`00 Inbox/\`
-- \`01 Projects/\`
-- \`90 Ops/Work Queue.md\` when present
-- recent logs and decisions only when needed
-
-## Review Goals
-
-- keep active work moving
-- surface blockers or stale work
-- keep project state resumable
-- avoid noisy churn
-EOF
+setup_github() {
+  echo "GitHub requires a Personal Access Token."
+  echo
+  echo "Steps:"
+  echo "  1. Go to https://github.com/settings/tokens"
+  echo "  2. Generate new token (classic)"
+  echo "  3. Select scopes: repo, read:org, read:user"
+  echo "  4. Copy the token"
+  echo
+  local token
+  token="$(prompt_secret "GitHub Personal Access Token (ghp_...)")"
+  mcp_add_github "$token"
+  echo "GitHub added."
 }
 
-write_openclaw_heartbeat() {
-  local target_path="$1"
-  local workflow_title="$2"
-  local workflow_slug="$3"
-  local escaped_title
-  local escaped_slug
-  local escaped_vault_path
-  local escaped_cadence
-  escaped_title="$(escape_sed_replacement "$workflow_title")"
-  escaped_slug="$(escape_sed_replacement "$workflow_slug")"
-  escaped_vault_path="$(escape_sed_replacement "$VAULT_DIR")"
-  escaped_cadence="$(escape_sed_replacement "$HEARTBEAT_CADENCE")"
-  ensure_dir "$(dirname "$target_path")"
-  sed \
-    -e "s|__WORKFLOW_TITLE__|$escaped_title|g" \
-    -e "s|__WORKFLOW_SLUG__|$escaped_slug|g" \
-    -e "s|__VAULT_PATH__|$escaped_vault_path|g" \
-    -e "s|__HEARTBEAT_CADENCE__|$escaped_cadence|g" \
-    "$TEMPLATES_DIR/openclaw/HEARTBEAT.md.template" > "$target_path"
-}
+# ─────────────────────────────────────────────────────────────
+# Git / GitHub setup
+# ─────────────────────────────────────────────────────────────
 
-configure_git_identity_if_needed() {
-  local current_name
-  local current_email
-  current_name="$(git -C "$VAULT_DIR" config user.name || true)"
-  current_email="$(git -C "$VAULT_DIR" config user.email || true)"
-
+configure_git_identity() {
+  local current_name current_email
+  current_name="$(git -C "$VAULT_DIR" config user.name 2>/dev/null || true)"
+  current_email="$(git -C "$VAULT_DIR" config user.email 2>/dev/null || true)"
   if [[ -z "$current_name" ]]; then
     current_name="$(prompt_default "Git user.name" "$USER_NAME")"
     git -C "$VAULT_DIR" config user.name "$current_name"
   fi
-
   if [[ -z "$current_email" ]]; then
     current_email="$(prompt_required "Git user.email")"
     git -C "$VAULT_DIR" config user.email "$current_email"
   fi
 }
 
-commit_setup_changes() {
-  git -C "$VAULT_DIR" add .
-  if git -C "$VAULT_DIR" diff --cached --quiet; then
-    echo "No new setup changes to commit."
-    return
-  fi
-  configure_git_identity_if_needed
-  git -C "$VAULT_DIR" commit -m "Complete initial vault setup"
-}
-
-setup_github_remote() {
-  local current_origin=""
-  local git_action=""
-
-  if ! prompt_yes_no "Set up Git and GitHub for this vault now?" "y"; then
-    return
-  fi
+setup_git() {
+  if ! prompt_yes_no "Set up Git for this vault?" "y"; then return; fi
 
   if ! git -C "$VAULT_DIR" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
     git -C "$VAULT_DIR" init -b main
   fi
 
-  commit_setup_changes
-
-  current_origin="$(git -C "$VAULT_DIR" remote get-url origin 2>/dev/null || true)"
-
-  echo
-  if [[ -n "$current_origin" ]]; then
-    echo "Current origin: $current_origin"
-    echo "GitHub action options: push, create, existing, skip"
-    git_action="$(prompt_choice "GitHub action" "push")"
-  else
-    echo "GitHub action options: create, existing, skip"
-    git_action="$(prompt_choice "GitHub action" "create")"
+  configure_git_identity
+  git -C "$VAULT_DIR" add .
+  if ! git -C "$VAULT_DIR" diff --cached --quiet; then
+    git -C "$VAULT_DIR" commit -m "Initial vault setup"
   fi
 
-  case "$git_action" in
-    push)
-      if [[ -z "$current_origin" ]]; then
-        echo "No origin exists yet. Choose create or existing instead."
-        return
-      fi
-      git -C "$VAULT_DIR" push -u origin HEAD
-      ;;
+  if ! prompt_yes_no "Connect this vault to a GitHub repository?" "y"; then return; fi
+
+  if ! command_exists gh; then
+    echo "GitHub CLI not found. Install from https://cli.github.com"
+    return
+  fi
+  if ! gh auth status >/dev/null 2>&1; then
+    echo "GitHub CLI is not authenticated. Run 'gh auth login' then re-run setup."
+    return
+  fi
+
+  echo
+  echo "Action options: create (new repo), existing (connect existing), skip"
+  local action
+  action="$(prompt_default "Action" "create")"
+
+  case "$action" in
     create)
-      if ! command_exists gh; then
-        echo "GitHub CLI not found. Install gh or connect a remote later."
-        return
-      fi
-      if ! github_cli_authenticated; then
-        echo "GitHub CLI is not authenticated. Run 'gh auth login' and rerun setup if you want automated repo creation."
-        return
-      fi
-      local repo_name
-      local visibility
-      repo_name="$(prompt_default "New GitHub repo name" "$(basename "$VAULT_DIR")")"
-      visibility="$(prompt_choice "Repo visibility (private/public)" "private")"
-      if [[ "$visibility" != "public" ]]; then
-        visibility="private"
-      fi
-      if [[ -n "$current_origin" ]]; then
-        git -C "$VAULT_DIR" remote remove origin
-      fi
+      local repo_name visibility
+      repo_name="$(prompt_default "New repo name" "$(basename "$VAULT_DIR")")"
+      visibility="$(prompt_default "Visibility (private/public)" "private")"
+      [[ "$visibility" != "public" ]] && visibility="private"
       gh repo create "$repo_name" "--$visibility" --source "$VAULT_DIR" --remote origin --push
       ;;
     existing)
-      local repo_full_name
-      local remote_url
-      if command_exists gh && github_cli_authenticated; then
-        repo_full_name="$(github_repo_picker)"
-      else
-        repo_full_name=""
-      fi
-      if [[ -z "$repo_full_name" ]]; then
-        repo_full_name="$(prompt_required "Existing GitHub repo (owner/repo)")"
-      fi
-      remote_url="https://github.com/$repo_full_name.git"
-      if [[ -n "$current_origin" ]]; then
-        git -C "$VAULT_DIR" remote set-url origin "$remote_url"
-      else
-        git -C "$VAULT_DIR" remote add origin "$remote_url"
-      fi
-      if prompt_yes_no "Push current branch to $repo_full_name now?" "y"; then
+      local repo_full
+      repo_full="$(prompt_required "Existing repo (owner/name)")"
+      git -C "$VAULT_DIR" remote add origin "https://github.com/$repo_full.git"
+      if prompt_yes_no "Push now?" "y"; then
         git -C "$VAULT_DIR" push -u origin HEAD
       fi
       ;;
-    skip)
-      ;;
     *)
-      echo "Unknown GitHub action: $git_action"
+      echo "Skipping GitHub."
       ;;
   esac
 }
 
+# ─────────────────────────────────────────────────────────────
+# BEGIN SETUP
+# ─────────────────────────────────────────────────────────────
+
+clear
+printf "┌──────────────────────────────────────────┐\n"
+printf "│           Agent Vault Setup              │\n"
+printf "└──────────────────────────────────────────┘\n"
 echo
-echo "Agent Vault guided setup"
-echo
-echo "This setup will help you:"
-echo "- understand what the vault is for"
-echo "- choose the right agent runtime(s)"
-echo "- define two real workflows"
-echo "- map the external systems those workflows rely on"
-echo "- scaffold platform-specific agent definitions"
-echo "- initialize Git and optionally connect GitHub"
-echo
+
+# ── Step 1: Name ──────────────────────────
 
 DEFAULT_USER_NAME="$(id -F 2>/dev/null || whoami)"
 USER_NAME="$(prompt_default "What should the system call you?" "$DEFAULT_USER_NAME")"
 
-echo
-echo "Pick the platforms you want to support."
-echo "Use comma-separated values: openclaw, claude, codex, chatgpt"
-PLATFORM_INPUT="$(prompt_default "Platforms" "claude,codex")"
+# ── Step 2: Vault location ────────────────
 
-IFS=',' read -r -a RAW_PLATFORMS <<< "$PLATFORM_INPUT"
-PLATFORMS=()
-for item in "${RAW_PLATFORMS[@]}"; do
-  platform="$(trim "$(printf '%s' "$item" | tr '[:upper:]' '[:lower:]')")"
-  if [[ -n "$platform" ]]; then
-    PLATFORMS+=("$platform")
+section "Vault Location"
+cat <<'MSG'
+The vault is a folder on your computer where your agents work.
+Projects, notes, logs, and tool configurations all live here.
+MSG
+echo
+DEFAULT_VAULT_DIR="$HOME/Documents/agent-vault"
+VAULT_DIR="$(prompt_default "Where should the vault be created?" "$DEFAULT_VAULT_DIR")"
+VAULT_DIR="${VAULT_DIR/#\~/$HOME}"
+
+if [[ -d "$VAULT_DIR" ]]; then
+  echo
+  echo "That folder already exists."
+  if ! prompt_yes_no "Continue and set up inside it?" "y"; then
+    echo "Choose a different path and re-run setup."
+    exit 1
   fi
-done
-
-if [[ ${#PLATFORMS[@]} -eq 0 ]]; then
-  echo "No platforms selected. Exiting."
-  exit 1
 fi
 
-echo
-echo "This repository is currently at:"
-echo "$ROOT_DIR"
-echo
-if [[ "$ROOT_DIR" != "$HOME/Documents/"* ]]; then
-  echo "Recommended: keep your active vault under $HOME/Documents."
-  echo "This installer will continue in place, but you may want to move the repo later."
-fi
+# ── Step 3: Platform selection ────────────
 
+section "Agent Platforms"
+cat <<'MSG'
+Choose which AI platforms you want your agents deployed to.
+Arrow keys to move, space to select, enter to confirm.
+MSG
+echo
+
+PLATFORM_OPTIONS=("Claude Code" "OpenClaw" "Codex" "ChatGPT")
+SELECTED_PLATFORMS=()
+multiselect SELECTED_PLATFORMS "${PLATFORM_OPTIONS[@]}"
+
+if [[ ${#SELECTED_PLATFORMS[@]} -eq 0 ]]; then
+  echo "No platforms selected — defaulting to Claude Code."
+  SELECTED_PLATFORMS=("Claude Code")
+fi
+echo "Selected: ${SELECTED_PLATFORMS[*]}"
+
+# ── Step 4: Workflows ─────────────────────
+
+section "Your Workflows"
+cat <<'MSG'
+Define two repeatable workflows you want agents to help you with.
+Good workflows have a clear trigger and touch specific tools.
+
+Examples:
+  - "Draft CRM case summaries after support calls"
+  - "Weekly marketing performance review"
+  - "Prepare stakeholder update from Jira sprint board"
+MSG
+echo
 WORKFLOW_1_TITLE="$(prompt_required "Workflow 1 title")"
-WORKFLOW_1_SUMMARY="$(prompt_required "Workflow 1 summary")"
+WORKFLOW_1_SUMMARY="$(prompt_required "Workflow 1: one sentence describing what it does")"
+echo
 WORKFLOW_2_TITLE="$(prompt_required "Workflow 2 title")"
-WORKFLOW_2_SUMMARY="$(prompt_required "Workflow 2 summary")"
+WORKFLOW_2_SUMMARY="$(prompt_required "Workflow 2: one sentence describing what it does")"
+
 WORKFLOW_1_SLUG="$(slugify "$WORKFLOW_1_TITLE")"
 WORKFLOW_2_SLUG="$(slugify "$WORKFLOW_2_TITLE")"
 
+# ── Step 5: Tool selection ────────────────
+
+section "Connected Tools"
+cat <<'MSG'
+Select the tools your agents should be able to access.
+Arrow keys to move, space to select, enter to confirm.
+MSG
 echo
-echo "Select the services the user relies on."
-echo "Use comma-separated values. Default: Atlassian,Salesforce,Dovetail,Slack"
-SERVICE_INPUT="$(prompt_default "Services" "Atlassian,Salesforce,Dovetail,Slack")"
-IFS=',' read -r -a RAW_SERVICES <<< "$SERVICE_INPUT"
-SERVICE_NAMES=()
-SERVICE_SLUGS=()
-SERVICE_USES=()
-SERVICE_WORKFLOW_MAPS=()
-for item in "${RAW_SERVICES[@]}"; do
-  service_name="$(trim "$item")"
-  if [[ -z "$service_name" ]]; then
-    continue
-  fi
-  SERVICE_NAMES+=("$service_name")
-  SERVICE_SLUGS+=("$(slugify "$service_name")")
-done
 
-SERVICE_COUNT=${#SERVICE_NAMES[@]}
-if [[ "$SERVICE_COUNT" -gt 0 ]]; then
+TOOL_OPTIONS=(
+  "Atlassian (Jira + Confluence)"
+  "Notion"
+  "Salesforce"
+  "Slack"
+  "GitHub"
+)
+SELECTED_TOOLS=()
+multiselect SELECTED_TOOLS "${TOOL_OPTIONS[@]}"
+echo "Selected: ${SELECTED_TOOLS[*]:-none}"
+
+# ── Step 6: Tool setup wizards ────────────
+
+if [[ ${#SELECTED_TOOLS[@]} -gt 0 ]]; then
+  section "Tool Setup"
+  echo "Walking through each tool now."
   echo
-  echo "Map each service to the workflows it supports."
+
+  for tool in "${SELECTED_TOOLS[@]}"; do
+    echo "── $tool"
+    echo
+    case "$tool" in
+      "Atlassian (Jira + Confluence)") setup_atlassian ;;
+      "Notion")                        setup_notion ;;
+      "Salesforce")                    setup_salesforce ;;
+      "Slack")                         setup_slack ;;
+      "GitHub")                        setup_github ;;
+    esac
+    echo
+  done
 fi
 
-i=0
-while [[ $i -lt $SERVICE_COUNT ]]; do
-  service_name="${SERVICE_NAMES[$i]}"
-  service_use="$(prompt_required "What do you do in $service_name?")"
-  echo "Choose the workflow mapping for $service_name: 1, 2, or both"
-  service_mapping="$(prompt_choice "Workflow mapping for $service_name" "both")"
-  service_mapping="$(workflow_number_for_name "$service_mapping")"
-  if [[ -z "$service_mapping" ]]; then
-    service_mapping="both"
-  fi
-  SERVICE_USES+=("$service_use")
-  SERVICE_WORKFLOW_MAPS+=("$service_mapping")
-  i=$((i + 1))
+# ── Step 7: Create vault structure ────────
+
+section "Creating Vault"
+echo "Building vault at: $VAULT_DIR"
+echo
+
+VAULT_DIRS=(
+  "00 Inbox"
+  "01 Projects"
+  "02 Areas"
+  "03 Resources"
+  "04 Archive"
+  "90 Ops/Agents/Claude Code"
+  "90 Ops/Agents/OpenClaw"
+  "90 Ops/Agents/Codex"
+  "90 Ops/Agents/ChatGPT"
+  "91 Templates"
+  "92 Dashboards"
+  "93 Attachments"
+  ".claude/agents"
+)
+for d in "${VAULT_DIRS[@]}"; do
+  ensure_dir "$VAULT_DIR/$d"
 done
 
-if prompt_yes_no "Enable recurring review / heartbeat guidance?" "y"; then
-  HEARTBEAT_ENABLED="yes"
-  HEARTBEAT_CADENCE="$(prompt_default "Recurring review cadence" "weekday-daily")"
-  if prompt_yes_no "Keep recurring review quiet unless action is needed?" "y"; then
-    HEARTBEAT_QUIET="yes"
-  else
-    HEARTBEAT_QUIET="no"
-  fi
-else
-  HEARTBEAT_ENABLED="no"
-  HEARTBEAT_CADENCE="manual"
-  HEARTBEAT_QUIET="yes"
+# Copy static files from the installer package
+# Copy AGENTS.md as CLAUDE.md (Claude Code reads CLAUDE.md as its project instructions)
+[[ -f "$SCRIPT_DIR/AGENTS.md" ]] && cp "$SCRIPT_DIR/AGENTS.md" "$VAULT_DIR/CLAUDE.md"
+for f in HEARTBEAT.md "Vault Home.md"; do
+  [[ -f "$SCRIPT_DIR/$f" ]] && cp "$SCRIPT_DIR/$f" "$VAULT_DIR/$f"
+done
+
+# Copy templates so users can reference and modify them
+[[ -d "$TEMPLATES_DIR" ]] && cp -r "$TEMPLATES_DIR" "$VAULT_DIR/"
+
+# Write .gitignore
+cat > "$VAULT_DIR/.gitignore" <<'GITIGNORE'
+# MCP config may contain credentials — do not commit
+.mcp.json
+
+# macOS
+.DS_Store
+
+# Keys and certificates
+*.key
+*.pem
+*.crt
+*.csr
+GITIGNORE
+
+# ── Step 8: Write .mcp.json ───────────────
+
+write_mcp_json
+if [[ ${#MCP_ENTRIES[@]} -gt 0 ]]; then
+  echo ".mcp.json written (gitignored — contains your credentials)"
 fi
 
-VAULT_DIR="$ROOT_DIR"
-AGENT_SOURCE_DIR="$VAULT_DIR/90 Ops/Agents"
-TUTORIAL_DIR="$VAULT_DIR/01 Projects/Agent Setup Tutorial"
+# ── Step 9: Generate vault documents ──────
 
-ensure_dir "$AGENT_SOURCE_DIR/OpenClaw"
-ensure_dir "$AGENT_SOURCE_DIR/Claude Code"
-ensure_dir "$AGENT_SOURCE_DIR/Codex Skills"
-ensure_dir "$AGENT_SOURCE_DIR/ChatGPT GPTs"
+TUTORIAL_DIR="$VAULT_DIR/01 Projects/Agent Setup Tutorial"
 ensure_dir "$TUTORIAL_DIR"
 
-write_repo_heartbeat
-write_heartbeat_config
+PLATFORM_LIST=""
+for p in "${SELECTED_PLATFORMS[@]}"; do PLATFORM_LIST+="- $p"$'\n'; done
+
+TOOL_LIST=""
+if [[ ${#SELECTED_TOOLS[@]} -gt 0 ]]; then
+  for t in "${SELECTED_TOOLS[@]}"; do TOOL_LIST+="- $t"$'\n'; done
+else
+  TOOL_LIST="None configured yet."
+fi
 
 cat > "$VAULT_DIR/90 Ops/First Run.md" <<EOF
 # First Run
 
 ## What This Is
 
-This vault is the working home for $USER_NAME and their AI workflows.
+This vault is the shared working space for $USER_NAME and their agents.
 
-It combines:
+It holds active projects, reference material, agent configurations,
+and the connections to the tools your workflows depend on.
 
-- durable notes
-- project context
-- reusable workflow agents
-- setup and operating guidance
+## Agent Platforms
 
-## How To Think About It
+$PLATFORM_LIST
+## Starter Workflows
 
-Build agents around repeatable workflows, not vague personas.
+1. **$WORKFLOW_1_TITLE** — $WORKFLOW_1_SUMMARY
+2. **$WORKFLOW_2_TITLE** — $WORKFLOW_2_SUMMARY
 
-Good workflow agents know:
+## Connected Tools
 
-1. what triggers them
-2. what context they should inspect first
-3. which external systems they touch
-4. what must be written down when the work is complete
-
-## Platforms Chosen
-
-$(printf -- '- %s\n' "${PLATFORMS[@]}")
-
-## Initial Workflows
-
-1. $WORKFLOW_1_TITLE
-   Summary: $WORKFLOW_1_SUMMARY
-2. $WORKFLOW_2_TITLE
-   Summary: $WORKFLOW_2_SUMMARY
-
-## Service Layer
-
-$(i=0; while [[ $i -lt $SERVICE_COUNT ]]; do printf -- '- %s: %s (workflow %s)\n' "${SERVICE_NAMES[$i]}" "${SERVICE_USES[$i]}" "${SERVICE_WORKFLOW_MAPS[$i]}"; i=$((i + 1)); done)
-
-## Recurring Review
-
-- enabled: $HEARTBEAT_ENABLED
-- cadence: $HEARTBEAT_CADENCE
-- quiet mode: $HEARTBEAT_QUIET
-
-## Git And GitHub
-
-The installer can initialize Git, create the first commit, and optionally create or connect a GitHub repo after setup is finished.
-
+$TOOL_LIST
 ## Next Step
 
-Open \`01 Projects/Agent Setup Tutorial/project.md\` and work through the tutorial project with your agent.
+Open \`01 Projects/Agent Setup Tutorial/project.md\` and follow the tasks there.
 EOF
-
-cat > "$VAULT_DIR/90 Ops/Service Map.md" <<EOF
-# Service Map
-
-## Purpose
-
-This file maps external platforms to the workflows they support so agent prompts stay grounded in real tools instead of generic role language.
-
-EOF
-
-i=0
-while [[ $i -lt $SERVICE_COUNT ]]; do
-  {
-    printf '## %s\n\n' "${SERVICE_NAMES[$i]}"
-    printf 'What the user does there: %s\n\n' "${SERVICE_USES[$i]}"
-    printf 'Mapped workflow: %s\n\n' "${SERVICE_WORKFLOW_MAPS[$i]}"
-  } >> "$VAULT_DIR/90 Ops/Service Map.md"
-  i=$((i + 1))
-done
-
-cat > "$AGENT_SOURCE_DIR/agent-candidates.md" <<EOF
-# Agent Candidates
-
-These are the first agents the system should build and refine.
-
-## Core Workflow Agents
-
-- $WORKFLOW_1_TITLE
-- $WORKFLOW_2_TITLE
-
-## Why These
-
-- they are repeatable
-- they have named triggers
-- they touch explicit systems
-- they are good candidates for durable instructions
-
-## Service-Grounded Refinement
-
-EOF
-
-i=0
-while [[ $i -lt $SERVICE_COUNT ]]; do
-  {
-    printf -- '- %s feeds workflow %s because the user uses it for %s\n' \
-      "${SERVICE_NAMES[$i]}" \
-      "${SERVICE_WORKFLOW_MAPS[$i]}" \
-      "${SERVICE_USES[$i]}"
-  } >> "$AGENT_SOURCE_DIR/agent-candidates.md"
-  i=$((i + 1))
-done
 
 cat > "$TUTORIAL_DIR/project.md" <<EOF
+---
+type: project
+status: active
+owner: $USER_NAME
+---
+
 # Agent Setup Tutorial
 
 ## Goal
 
-Turn this blank vault into a usable working system for $USER_NAME.
+Get the vault working end-to-end for $USER_NAME.
 
-## Chosen Platforms
+## Platforms
 
-$(printf -- '- %s\n' "${PLATFORMS[@]}")
+$PLATFORM_LIST
+## Workflows
 
-## Starter Workflows
+- **$WORKFLOW_1_TITLE**: $WORKFLOW_1_SUMMARY
+- **$WORKFLOW_2_TITLE**: $WORKFLOW_2_SUMMARY
 
-- $WORKFLOW_1_TITLE: $WORKFLOW_1_SUMMARY
-- $WORKFLOW_2_TITLE: $WORKFLOW_2_SUMMARY
+## Done when
 
-## Service Scope
-
-$(i=0; while [[ $i -lt $SERVICE_COUNT ]]; do printf -- '- %s: %s\n' "${SERVICE_NAMES[$i]}" "${SERVICE_USES[$i]}"; i=$((i + 1)); done)
-
-## Outcome Definition
-
-This project is complete when:
-
-- at least one workflow agent is fully customized
-- Git is initialized and the setup is committed
-- GitHub is either connected or explicitly deferred
-- at least one external service is connected
-- the next real project is ready to run through the system
+- At least one workflow agent is tested and working
+- At least one tool connection is verified
+- The vault is committed to Git
+- The next real project has been started
 EOF
 
 cat > "$TUTORIAL_DIR/tasks.md" <<EOF
@@ -639,169 +632,107 @@ cat > "$TUTORIAL_DIR/tasks.md" <<EOF
 
 EOF
 append_task "$TUTORIAL_DIR/tasks.md" "Read \`90 Ops/First Run.md\`."
-append_task "$TUTORIAL_DIR/tasks.md" "Review \`90 Ops/Service Map.md\` and correct anything too vague."
-append_task "$TUTORIAL_DIR/tasks.md" "Review \`HEARTBEAT.md\` and \`90 Ops/Heartbeat Config.md\`."
-append_task "$TUTORIAL_DIR/tasks.md" "Choose which workflow should become the first fully usable agent."
+append_task "$TUTORIAL_DIR/tasks.md" "Open Claude Code with this folder as the project root."
+append_task "$TUTORIAL_DIR/tasks.md" "Ask your agent to describe what it can see in the vault."
 
-printf '\n## Services\n\n' >> "$TUTORIAL_DIR/tasks.md"
-i=0
-while [[ $i -lt $SERVICE_COUNT ]]; do
-  append_task "$TUTORIAL_DIR/tasks.md" "Connect or validate access to ${SERVICE_NAMES[$i]}."
-  i=$((i + 1))
-done
+if [[ ${#SELECTED_TOOLS[@]} -gt 0 ]]; then
+  printf '\n## Verify tool connections\n\n' >> "$TUTORIAL_DIR/tasks.md"
+  for tool in "${SELECTED_TOOLS[@]}"; do
+    append_task "$TUTORIAL_DIR/tasks.md" "Test the $tool connection: ask your agent to fetch something from it."
+  done
+fi
 
-printf '\n## Git And GitHub\n\n' >> "$TUTORIAL_DIR/tasks.md"
-append_task "$TUTORIAL_DIR/tasks.md" "Initialize Git if needed."
-append_task "$TUTORIAL_DIR/tasks.md" "Create the initial setup commit."
-append_task "$TUTORIAL_DIR/tasks.md" "Create or connect the GitHub repo."
-
-printf '\n## Recurring Review\n\n' >> "$TUTORIAL_DIR/tasks.md"
-append_task "$TUTORIAL_DIR/tasks.md" "Confirm the recurring review cadence and quiet-mode settings."
-append_task "$TUTORIAL_DIR/tasks.md" "Choose how the recurring review mechanism will actually run on the selected platform(s)."
-
-printf '\n## Validation\n\n' >> "$TUTORIAL_DIR/tasks.md"
-append_task "$TUTORIAL_DIR/tasks.md" "Run one real task through the first workflow agent."
-append_task "$TUTORIAL_DIR/tasks.md" "Record what the agent needed but did not have."
-append_task "$TUTORIAL_DIR/tasks.md" "Create the next project that this system should support."
+printf '\n## First workflow\n\n' >> "$TUTORIAL_DIR/tasks.md"
+append_task "$TUTORIAL_DIR/tasks.md" "Run a real task through the '$WORKFLOW_1_TITLE' workflow."
+append_task "$TUTORIAL_DIR/tasks.md" "Note anything the agent needed but didn't have."
+append_task "$TUTORIAL_DIR/tasks.md" "Create the next real project in \`01 Projects/\`."
 
 cat > "$TUTORIAL_DIR/log.md" <<EOF
 # Log
 
-- Setup initialized for $USER_NAME.
-- Platforms selected: $(printf '%s' "${PLATFORMS[*]}")
-- Services selected: $(printf '%s ' "${SERVICE_NAMES[@]}")
-- Recurring review enabled: $HEARTBEAT_ENABLED
+- $(date +%Y-%m-%d): Vault initialized for $USER_NAME.
+  Platforms: ${SELECTED_PLATFORMS[*]}
+  Tools: ${SELECTED_TOOLS[*]:-none}
 EOF
 
 cat > "$TUTORIAL_DIR/decisions.md" <<EOF
 # Decisions
 
-- This vault will be used as the durable operating layer for agent work.
-- Agents should be defined around repeatable workflows before expanding into more specialized roles.
-- Service usage should shape agent prompts so they are grounded in real work rather than abstract roles.
-- Recurring review should stay lightweight and quiet by default.
+- Vault created at: $VAULT_DIR
+- Platforms: ${SELECTED_PLATFORMS[*]}
+- Tools: ${SELECTED_TOOLS[*]:-none}
+- Workflows defined: $WORKFLOW_1_TITLE, $WORKFLOW_2_TITLE
 EOF
 
-create_openclaw_sources() {
-  local title="$1"
-  local slug="$2"
-  local summary="$3"
-  local workflow_number="$4"
-  local source_root="$AGENT_SOURCE_DIR/OpenClaw/$slug"
-  write_file_from_template \
-    "$TEMPLATES_DIR/openclaw/AGENTS.md.template" \
-    "$source_root/AGENTS.md" \
-    "$title" \
-    "$slug" \
-    "$VAULT_DIR"
-  append_workflow_context "$source_root/AGENTS.md" "$title" "$summary" "$workflow_number" "$SERVICE_COUNT"
-  write_file_from_template \
-    "$TEMPLATES_DIR/openclaw/BOOTSTRAP.md.template" \
-    "$source_root/BOOTSTRAP.md" \
-    "$title" \
-    "$slug" \
-    "$VAULT_DIR"
-  write_openclaw_heartbeat "$source_root/HEARTBEAT.md" "$title" "$slug"
-}
+# ── Step 10: Generate agent files ─────────
 
-create_claude_sources() {
-  local title="$1"
-  local slug="$2"
-  local summary="$3"
-  local workflow_number="$4"
-  write_file_from_template \
-    "$TEMPLATES_DIR/claude-code/subagent.md.template" \
-    "$AGENT_SOURCE_DIR/Claude Code/$slug.md" \
-    "$title" \
-    "$slug" \
-    "$VAULT_DIR"
-  append_workflow_context "$AGENT_SOURCE_DIR/Claude Code/$slug.md" "$title" "$summary" "$workflow_number" "$SERVICE_COUNT"
-}
-
-create_codex_sources() {
-  local title="$1"
-  local slug="$2"
-  local summary="$3"
-  local workflow_number="$4"
-  write_file_from_template \
-    "$TEMPLATES_DIR/codex-skill/SKILL.md.template" \
-    "$AGENT_SOURCE_DIR/Codex Skills/$slug/SKILL.md" \
-    "$title" \
-    "$slug" \
-    "$VAULT_DIR"
-  append_workflow_context "$AGENT_SOURCE_DIR/Codex Skills/$slug/SKILL.md" "$title" "$summary" "$workflow_number" "$SERVICE_COUNT"
-}
-
-create_chatgpt_sources() {
-  local title="$1"
-  local slug="$2"
-  local summary="$3"
-  local workflow_number="$4"
-  write_file_from_template \
-    "$TEMPLATES_DIR/chatgpt/custom-gpt.md.template" \
-    "$AGENT_SOURCE_DIR/ChatGPT GPTs/$slug.md" \
-    "$title" \
-    "$slug" \
-    "$VAULT_DIR"
-  append_workflow_context "$AGENT_SOURCE_DIR/ChatGPT GPTs/$slug.md" "$title" "$summary" "$workflow_number" "$SERVICE_COUNT"
-}
-
-for platform in "${PLATFORMS[@]}"; do
+for platform in "${SELECTED_PLATFORMS[@]}"; do
   case "$platform" in
-    openclaw)
-      create_openclaw_sources "$WORKFLOW_1_TITLE" "$WORKFLOW_1_SLUG" "$WORKFLOW_1_SUMMARY" "1"
-      create_openclaw_sources "$WORKFLOW_2_TITLE" "$WORKFLOW_2_SLUG" "$WORKFLOW_2_SUMMARY" "2"
-      if prompt_yes_no "Also deploy live OpenClaw workspaces now?" "n"; then
-        OPENCLAW_ROOT="$(prompt_default "OpenClaw workspaces path" "$HOME/openclaw agents/workspaces")"
-        ensure_dir "$OPENCLAW_ROOT/$WORKFLOW_1_SLUG"
-        ensure_dir "$OPENCLAW_ROOT/$WORKFLOW_2_SLUG"
-        cp "$AGENT_SOURCE_DIR/OpenClaw/$WORKFLOW_1_SLUG/AGENTS.md" "$OPENCLAW_ROOT/$WORKFLOW_1_SLUG/AGENTS.md"
-        cp "$AGENT_SOURCE_DIR/OpenClaw/$WORKFLOW_1_SLUG/BOOTSTRAP.md" "$OPENCLAW_ROOT/$WORKFLOW_1_SLUG/BOOTSTRAP.md"
-        cp "$AGENT_SOURCE_DIR/OpenClaw/$WORKFLOW_1_SLUG/HEARTBEAT.md" "$OPENCLAW_ROOT/$WORKFLOW_1_SLUG/HEARTBEAT.md"
-        cp "$AGENT_SOURCE_DIR/OpenClaw/$WORKFLOW_2_SLUG/AGENTS.md" "$OPENCLAW_ROOT/$WORKFLOW_2_SLUG/AGENTS.md"
-        cp "$AGENT_SOURCE_DIR/OpenClaw/$WORKFLOW_2_SLUG/BOOTSTRAP.md" "$OPENCLAW_ROOT/$WORKFLOW_2_SLUG/BOOTSTRAP.md"
-        cp "$AGENT_SOURCE_DIR/OpenClaw/$WORKFLOW_2_SLUG/HEARTBEAT.md" "$OPENCLAW_ROOT/$WORKFLOW_2_SLUG/HEARTBEAT.md"
+    "Claude Code")
+      if [[ -f "$TEMPLATES_DIR/claude-code/subagent.md.template" ]]; then
+        write_from_template \
+          "$TEMPLATES_DIR/claude-code/subagent.md.template" \
+          "$VAULT_DIR/90 Ops/Agents/Claude Code/$WORKFLOW_1_SLUG.md"
+        write_from_template \
+          "$TEMPLATES_DIR/claude-code/subagent.md.template" \
+          "$VAULT_DIR/90 Ops/Agents/Claude Code/$WORKFLOW_2_SLUG.md"
+        cp "$VAULT_DIR/90 Ops/Agents/Claude Code/$WORKFLOW_1_SLUG.md" \
+           "$VAULT_DIR/.claude/agents/$WORKFLOW_1_SLUG.md"
+        cp "$VAULT_DIR/90 Ops/Agents/Claude Code/$WORKFLOW_2_SLUG.md" \
+           "$VAULT_DIR/.claude/agents/$WORKFLOW_2_SLUG.md"
       fi
       ;;
-    claude)
-      create_claude_sources "$WORKFLOW_1_TITLE" "$WORKFLOW_1_SLUG" "$WORKFLOW_1_SUMMARY" "1"
-      create_claude_sources "$WORKFLOW_2_TITLE" "$WORKFLOW_2_SLUG" "$WORKFLOW_2_SUMMARY" "2"
-      if prompt_yes_no "Also deploy Claude Code subagents into this project now?" "n"; then
-        ensure_dir "$VAULT_DIR/.claude/agents"
-        cp "$AGENT_SOURCE_DIR/Claude Code/$WORKFLOW_1_SLUG.md" "$VAULT_DIR/.claude/agents/$WORKFLOW_1_SLUG.md"
-        cp "$AGENT_SOURCE_DIR/Claude Code/$WORKFLOW_2_SLUG.md" "$VAULT_DIR/.claude/agents/$WORKFLOW_2_SLUG.md"
+    "OpenClaw")
+      if [[ -f "$TEMPLATES_DIR/openclaw/AGENTS.md.template" ]]; then
+        write_from_template \
+          "$TEMPLATES_DIR/openclaw/AGENTS.md.template" \
+          "$VAULT_DIR/90 Ops/Agents/OpenClaw/$WORKFLOW_1_SLUG/AGENTS.md"
+        write_from_template \
+          "$TEMPLATES_DIR/openclaw/BOOTSTRAP.md.template" \
+          "$VAULT_DIR/90 Ops/Agents/OpenClaw/$WORKFLOW_1_SLUG/BOOTSTRAP.md"
+        write_from_template \
+          "$TEMPLATES_DIR/openclaw/AGENTS.md.template" \
+          "$VAULT_DIR/90 Ops/Agents/OpenClaw/$WORKFLOW_2_SLUG/AGENTS.md"
+        write_from_template \
+          "$TEMPLATES_DIR/openclaw/BOOTSTRAP.md.template" \
+          "$VAULT_DIR/90 Ops/Agents/OpenClaw/$WORKFLOW_2_SLUG/BOOTSTRAP.md"
       fi
       ;;
-    codex)
-      create_codex_sources "$WORKFLOW_1_TITLE" "$WORKFLOW_1_SLUG" "$WORKFLOW_1_SUMMARY" "1"
-      create_codex_sources "$WORKFLOW_2_TITLE" "$WORKFLOW_2_SLUG" "$WORKFLOW_2_SUMMARY" "2"
-      if prompt_yes_no "Also deploy Codex skills into ~/.codex/skills now?" "n"; then
-        ensure_dir "$HOME/.codex/skills/$WORKFLOW_1_SLUG"
-        ensure_dir "$HOME/.codex/skills/$WORKFLOW_2_SLUG"
-        cp "$AGENT_SOURCE_DIR/Codex Skills/$WORKFLOW_1_SLUG/SKILL.md" "$HOME/.codex/skills/$WORKFLOW_1_SLUG/SKILL.md"
-        cp "$AGENT_SOURCE_DIR/Codex Skills/$WORKFLOW_2_SLUG/SKILL.md" "$HOME/.codex/skills/$WORKFLOW_2_SLUG/SKILL.md"
+    "Codex")
+      if [[ -f "$TEMPLATES_DIR/codex-skill/SKILL.md.template" ]]; then
+        write_from_template \
+          "$TEMPLATES_DIR/codex-skill/SKILL.md.template" \
+          "$VAULT_DIR/90 Ops/Agents/Codex/$WORKFLOW_1_SLUG/SKILL.md"
+        write_from_template \
+          "$TEMPLATES_DIR/codex-skill/SKILL.md.template" \
+          "$VAULT_DIR/90 Ops/Agents/Codex/$WORKFLOW_2_SLUG/SKILL.md"
       fi
       ;;
-    chatgpt)
-      create_chatgpt_sources "$WORKFLOW_1_TITLE" "$WORKFLOW_1_SLUG" "$WORKFLOW_1_SUMMARY" "1"
-      create_chatgpt_sources "$WORKFLOW_2_TITLE" "$WORKFLOW_2_SLUG" "$WORKFLOW_2_SUMMARY" "2"
-      ;;
-    *)
-      echo "Skipping unknown platform: $platform"
+    "ChatGPT")
+      if [[ -f "$TEMPLATES_DIR/chatgpt/custom-gpt.md.template" ]]; then
+        write_from_template \
+          "$TEMPLATES_DIR/chatgpt/custom-gpt.md.template" \
+          "$VAULT_DIR/90 Ops/Agents/ChatGPT/$WORKFLOW_1_SLUG.md"
+        write_from_template \
+          "$TEMPLATES_DIR/chatgpt/custom-gpt.md.template" \
+          "$VAULT_DIR/90 Ops/Agents/ChatGPT/$WORKFLOW_2_SLUG.md"
+      fi
       ;;
   esac
 done
 
-setup_github_remote
+# ── Step 11: Git / GitHub ─────────────────
 
-echo
-echo "Setup complete."
-echo
+section "Git Setup"
+setup_git
+
+# ── Done ──────────────────────────────────
+
+section "Setup Complete"
+printf "Your vault is ready at:\n  %s\n\n" "$VAULT_DIR"
 echo "Start here:"
-echo "- $VAULT_DIR/90 Ops/First Run.md"
-echo "- $VAULT_DIR/90 Ops/Service Map.md"
-echo "- $TUTORIAL_DIR/project.md"
-echo "- $TUTORIAL_DIR/tasks.md"
+printf "  %s/90 Ops/First Run.md\n" "$VAULT_DIR"
+printf "  %s/01 Projects/Agent Setup Tutorial/project.md\n" "$VAULT_DIR"
 echo
-echo "Source workflow agents were created under:"
-echo "- $AGENT_SOURCE_DIR"
+echo "Open Claude Code with that folder as the project root to get started."
+echo

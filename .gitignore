@@ -1,5 +1,16 @@
+# MCP config may contain credentials — do not commit to vaults created from this template
+.mcp.json
+
+# macOS
 .DS_Store
+
+# Obsidian workspace state
 .obsidian/workspace*.json
 .obsidian/cache/
 .obsidian/workspace.json
 
+# Keys and certificates
+*.key
+*.pem
+*.crt
+*.csr
