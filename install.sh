@@ -148,13 +148,11 @@ append_task() {
 }
 
 write_from_template() {
-  local template_path="$1" target_path="$2"
+  local template_path="$1" target_path="$2" agent_title="$3" agent_slug="$4"
   ensure_dir "$(dirname "$target_path")"
   sed \
-    -e "s|__WORKFLOW_1_TITLE__|$(escape_sed "$WORKFLOW_1_TITLE")|g" \
-    -e "s|__WORKFLOW_2_TITLE__|$(escape_sed "$WORKFLOW_2_TITLE")|g" \
-    -e "s|__WORKFLOW_1_SLUG__|$(escape_sed "$WORKFLOW_1_SLUG")|g" \
-    -e "s|__WORKFLOW_2_SLUG__|$(escape_sed "$WORKFLOW_2_SLUG")|g" \
+    -e "s|__WORKFLOW_TITLE__|$(escape_sed "$agent_title")|g" \
+    -e "s|__WORKFLOW_SLUG__|$(escape_sed "$agent_slug")|g" \
     -e "s|__USER_NAME__|$(escape_sed "$USER_NAME")|g" \
     -e "s|__VAULT_PATH__|$(escape_sed "$VAULT_DIR")|g" \
     "$template_path" > "$target_path"
@@ -435,27 +433,39 @@ if [[ ${#SELECTED_PLATFORMS[@]} -eq 0 ]]; then
 fi
 echo "Selected: ${SELECTED_PLATFORMS[*]}"
 
-# ── Step 4: Workflows ─────────────────────
+# ── Step 4: Agents ────────────────────────
 
-section "Your Workflows"
+section "Your Agents"
 cat <<'MSG'
-Define two repeatable workflows you want agents to help you with.
-Good workflows have a clear trigger and touch specific tools.
+Let's create your first agents. Each one handles a specific,
+repeatable type of task — one job, done consistently.
 
-Examples:
-  - "Draft CRM case summaries after support calls"
-  - "Weekly marketing performance review"
-  - "Prepare stakeholder update from Jira sprint board"
+Think of something like: "every time I finish a client call,
+I need to write up a summary and log it in the CRM" — that's
+a great candidate for an agent.
 MSG
 echo
-WORKFLOW_1_TITLE="$(prompt_required "Workflow 1 title")"
-WORKFLOW_1_SUMMARY="$(prompt_required "Workflow 1: one sentence describing what it does")"
-echo
-WORKFLOW_2_TITLE="$(prompt_required "Workflow 2 title")"
-WORKFLOW_2_SUMMARY="$(prompt_required "Workflow 2: one sentence describing what it does")"
 
-WORKFLOW_1_SLUG="$(slugify "$WORKFLOW_1_TITLE")"
-WORKFLOW_2_SLUG="$(slugify "$WORKFLOW_2_TITLE")"
+AGENT_NAMES=()
+AGENT_SLUGS=()
+AGENT_SUMMARIES=()
+
+while true; do
+  agent_num=$((${#AGENT_NAMES[@]} + 1))
+  echo "── Agent $agent_num"
+  agent_name="$(prompt_required "Agent name (e.g. 'Post-call summary', 'Weekly pipeline review')")"
+  agent_summary="$(prompt_required "What does this agent help you with?")"
+  AGENT_NAMES+=("$agent_name")
+  AGENT_SLUGS+=("$(slugify "$agent_name")")
+  AGENT_SUMMARIES+=("$agent_summary")
+  echo
+  if [[ ${#AGENT_NAMES[@]} -ge 1 ]]; then
+    if ! prompt_yes_no "Add another agent?" "n"; then
+      break
+    fi
+    echo
+  fi
+done
 
 # ── Step 5: Tool selection ────────────────
 
@@ -583,10 +593,9 @@ and the connections to the tools your workflows depend on.
 ## Agent Platforms
 
 $PLATFORM_LIST
-## Starter Workflows
+## Agents
 
-1. **$WORKFLOW_1_TITLE** — $WORKFLOW_1_SUMMARY
-2. **$WORKFLOW_2_TITLE** — $WORKFLOW_2_SUMMARY
+$(for i in "${!AGENT_NAMES[@]}"; do printf '%d. **%s** — %s\n' "$((i+1))" "${AGENT_NAMES[$i]}" "${AGENT_SUMMARIES[$i]}"; done)
 
 ## Connected Tools
 
@@ -612,10 +621,9 @@ Get the vault working end-to-end for $USER_NAME.
 ## Platforms
 
 $PLATFORM_LIST
-## Workflows
+## Agents
 
-- **$WORKFLOW_1_TITLE**: $WORKFLOW_1_SUMMARY
-- **$WORKFLOW_2_TITLE**: $WORKFLOW_2_SUMMARY
+$(for i in "${!AGENT_NAMES[@]}"; do printf -- '- **%s**: %s\n' "${AGENT_NAMES[$i]}" "${AGENT_SUMMARIES[$i]}"; done)
 
 ## Done when
 
@@ -643,7 +651,7 @@ if [[ ${#SELECTED_TOOLS[@]} -gt 0 ]]; then
 fi
 
 printf '\n## First workflow\n\n' >> "$TUTORIAL_DIR/tasks.md"
-append_task "$TUTORIAL_DIR/tasks.md" "Run a real task through the '$WORKFLOW_1_TITLE' workflow."
+append_task "$TUTORIAL_DIR/tasks.md" "Run a real task through the '${AGENT_NAMES[0]}' agent."
 append_task "$TUTORIAL_DIR/tasks.md" "Note anything the agent needed but didn't have."
 append_task "$TUTORIAL_DIR/tasks.md" "Create the next real project in \`01 Projects/\`."
 
@@ -661,64 +669,56 @@ cat > "$TUTORIAL_DIR/decisions.md" <<EOF
 - Vault created at: $VAULT_DIR
 - Platforms: ${SELECTED_PLATFORMS[*]}
 - Tools: ${SELECTED_TOOLS[*]:-none}
-- Workflows defined: $WORKFLOW_1_TITLE, $WORKFLOW_2_TITLE
+- Agents defined: $(IFS=', '; echo "${AGENT_NAMES[*]}")
 EOF
 
 # ── Step 10: Generate agent files ─────────
 
 for platform in "${SELECTED_PLATFORMS[@]}"; do
-  case "$platform" in
-    "Claude Code")
-      if [[ -f "$TEMPLATES_DIR/claude-code/subagent.md.template" ]]; then
-        write_from_template \
-          "$TEMPLATES_DIR/claude-code/subagent.md.template" \
-          "$VAULT_DIR/90 Ops/Agents/Claude Code/$WORKFLOW_1_SLUG.md"
-        write_from_template \
-          "$TEMPLATES_DIR/claude-code/subagent.md.template" \
-          "$VAULT_DIR/90 Ops/Agents/Claude Code/$WORKFLOW_2_SLUG.md"
-        cp "$VAULT_DIR/90 Ops/Agents/Claude Code/$WORKFLOW_1_SLUG.md" \
-           "$VAULT_DIR/.claude/agents/$WORKFLOW_1_SLUG.md"
-        cp "$VAULT_DIR/90 Ops/Agents/Claude Code/$WORKFLOW_2_SLUG.md" \
-           "$VAULT_DIR/.claude/agents/$WORKFLOW_2_SLUG.md"
-      fi
-      ;;
-    "OpenClaw")
-      if [[ -f "$TEMPLATES_DIR/openclaw/AGENTS.md.template" ]]; then
-        write_from_template \
-          "$TEMPLATES_DIR/openclaw/AGENTS.md.template" \
-          "$VAULT_DIR/90 Ops/Agents/OpenClaw/$WORKFLOW_1_SLUG/AGENTS.md"
-        write_from_template \
-          "$TEMPLATES_DIR/openclaw/BOOTSTRAP.md.template" \
-          "$VAULT_DIR/90 Ops/Agents/OpenClaw/$WORKFLOW_1_SLUG/BOOTSTRAP.md"
-        write_from_template \
-          "$TEMPLATES_DIR/openclaw/AGENTS.md.template" \
-          "$VAULT_DIR/90 Ops/Agents/OpenClaw/$WORKFLOW_2_SLUG/AGENTS.md"
-        write_from_template \
-          "$TEMPLATES_DIR/openclaw/BOOTSTRAP.md.template" \
-          "$VAULT_DIR/90 Ops/Agents/OpenClaw/$WORKFLOW_2_SLUG/BOOTSTRAP.md"
-      fi
-      ;;
-    "Codex")
-      if [[ -f "$TEMPLATES_DIR/codex-skill/SKILL.md.template" ]]; then
-        write_from_template \
-          "$TEMPLATES_DIR/codex-skill/SKILL.md.template" \
-          "$VAULT_DIR/90 Ops/Agents/Codex/$WORKFLOW_1_SLUG/SKILL.md"
-        write_from_template \
-          "$TEMPLATES_DIR/codex-skill/SKILL.md.template" \
-          "$VAULT_DIR/90 Ops/Agents/Codex/$WORKFLOW_2_SLUG/SKILL.md"
-      fi
-      ;;
-    "ChatGPT")
-      if [[ -f "$TEMPLATES_DIR/chatgpt/custom-gpt.md.template" ]]; then
-        write_from_template \
-          "$TEMPLATES_DIR/chatgpt/custom-gpt.md.template" \
-          "$VAULT_DIR/90 Ops/Agents/ChatGPT/$WORKFLOW_1_SLUG.md"
-        write_from_template \
-          "$TEMPLATES_DIR/chatgpt/custom-gpt.md.template" \
-          "$VAULT_DIR/90 Ops/Agents/ChatGPT/$WORKFLOW_2_SLUG.md"
-      fi
-      ;;
-  esac
+  for i in "${!AGENT_NAMES[@]}"; do
+    agent_name="${AGENT_NAMES[$i]}"
+    agent_slug="${AGENT_SLUGS[$i]}"
+    case "$platform" in
+      "Claude Code")
+        if [[ -f "$TEMPLATES_DIR/claude-code/subagent.md.template" ]]; then
+          write_from_template \
+            "$TEMPLATES_DIR/claude-code/subagent.md.template" \
+            "$VAULT_DIR/90 Ops/Agents/Claude Code/$agent_slug.md" \
+            "$agent_name" "$agent_slug"
+          cp "$VAULT_DIR/90 Ops/Agents/Claude Code/$agent_slug.md" \
+             "$VAULT_DIR/.claude/agents/$agent_slug.md"
+        fi
+        ;;
+      "OpenClaw")
+        if [[ -f "$TEMPLATES_DIR/openclaw/AGENTS.md.template" ]]; then
+          write_from_template \
+            "$TEMPLATES_DIR/openclaw/AGENTS.md.template" \
+            "$VAULT_DIR/90 Ops/Agents/OpenClaw/$agent_slug/AGENTS.md" \
+            "$agent_name" "$agent_slug"
+          write_from_template \
+            "$TEMPLATES_DIR/openclaw/BOOTSTRAP.md.template" \
+            "$VAULT_DIR/90 Ops/Agents/OpenClaw/$agent_slug/BOOTSTRAP.md" \
+            "$agent_name" "$agent_slug"
+        fi
+        ;;
+      "Codex")
+        if [[ -f "$TEMPLATES_DIR/codex-skill/SKILL.md.template" ]]; then
+          write_from_template \
+            "$TEMPLATES_DIR/codex-skill/SKILL.md.template" \
+            "$VAULT_DIR/90 Ops/Agents/Codex/$agent_slug/SKILL.md" \
+            "$agent_name" "$agent_slug"
+        fi
+        ;;
+      "ChatGPT")
+        if [[ -f "$TEMPLATES_DIR/chatgpt/custom-gpt.md.template" ]]; then
+          write_from_template \
+            "$TEMPLATES_DIR/chatgpt/custom-gpt.md.template" \
+            "$VAULT_DIR/90 Ops/Agents/ChatGPT/$agent_slug.md" \
+            "$agent_name" "$agent_slug"
+        fi
+        ;;
+    esac
+  done
 done
 
 # ── Step 11: Git / GitHub ─────────────────
