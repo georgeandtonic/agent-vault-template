@@ -444,6 +444,28 @@ printf "┌───────────────────────
 printf "│           Agent Vault Setup              │\n"
 printf "└──────────────────────────────────────────┘\n"
 echo
+cat <<'MSG'
+Agent Vault is a structured workspace that lives on your computer
+and gives your AI agent a shared office to work from.
+
+Instead of starting every conversation from scratch, your agent
+will have access to your active projects, running task lists,
+decision history, and connected tools — all in one place.
+
+Everything is organized into a simple folder structure:
+
+  01 Projects/   — active work, one folder per project
+  02 Areas/      — ongoing responsibilities
+  03 Resources/  — reference material
+  04 Archive/    — completed or inactive work
+  90 Ops/        — vault-level operating docs
+
+This setup will ask you a few questions, connect any tools
+you use, and create the vault folder on your machine.
+
+MSG
+read -r -p "Press enter to get started..."
+echo
 
 # ── Step 1: Name ──────────────────────────
 
@@ -646,9 +668,26 @@ setup_git
 
 section "Setup Complete"
 printf "Your vault is ready at:\n  %s\n\n" "$VAULT_DIR"
-echo "Start here:"
-printf "  %s/90 Ops/First Run.md\n" "$VAULT_DIR"
-printf "  %s/01 Projects/Agent Setup Tutorial/project.md\n" "$VAULT_DIR"
-echo
-echo "Open Claude Code with that folder as the project root to get started."
-echo
+cat <<MSG
+How to use it:
+
+  1. Open a terminal and navigate to your vault:
+       cd "$VAULT_DIR"
+
+  2. Start a Claude Code session there:
+       claude
+
+     Claude will read the vault structure automatically and know
+     how to organize your work — projects, tasks, decisions,
+     and logs will all stay in the right place.
+
+  3. You can also open the folder in VS Code to browse files:
+       code "$VAULT_DIR"
+
+     This is useful for reading project notes, reviewing what
+     your agent has written, or editing things directly.
+
+A good first message to your agent:
+  "Read First Run.md in 90 Ops and walk me through the vault."
+
+MSG
