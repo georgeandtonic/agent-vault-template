@@ -42,5 +42,3 @@ The installer will:
 - Claude Code: `.claude/agents/*.md` subagents with YAML frontmatter
 - Codex: skill folders containing `SKILL.md`
 - ChatGPT: custom GPT builder instructions and conversation starters
-
-See [`docs/FIRST-RUN.md`](/Users/george/Documents/agent-vault-template/docs/FIRST-RUN.md) and [`docs/PLATFORM-GUIDE.md`](/Users/george/Documents/agent-vault-template/docs/PLATFORM-GUIDE.md) for more detail.
