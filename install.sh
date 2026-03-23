@@ -3,7 +3,6 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-TEMPLATES_DIR="$SCRIPT_DIR/templates"
 
 # ─────────────────────────────────────────────────────────────
 # Terminal helpers
@@ -148,14 +147,339 @@ append_task() {
 }
 
 write_from_template() {
-  local template_path="$1" target_path="$2" agent_title="$3" agent_slug="$4"
+  local tpl_fn="$1" target_path="$2" agent_title="$3" agent_slug="$4"
   ensure_dir "$(dirname "$target_path")"
-  sed \
+  "$tpl_fn" | sed \
     -e "s|__WORKFLOW_TITLE__|$(escape_sed "$agent_title")|g" \
     -e "s|__WORKFLOW_SLUG__|$(escape_sed "$agent_slug")|g" \
     -e "s|__USER_NAME__|$(escape_sed "$USER_NAME")|g" \
     -e "s|__VAULT_PATH__|$(escape_sed "$VAULT_DIR")|g" \
-    "$template_path" > "$target_path"
+    > "$target_path"
+}
+
+# ─────────────────────────────────────────────────────────────
+# Inline file content
+# ─────────────────────────────────────────────────────────────
+
+_content_claude_md() { cat <<'TEMPLATE'
+# Agent Vault Operating Rules
+
+## Purpose
+
+This vault is the shared working office for the user and their agents.
+Treat it as the source of truth for project state, task state, decisions, logs, and reusable knowledge.
+
+## Core Rules
+
+- Prefer updating existing project notes over creating duplicate notes.
+- Keep folders shallow and use note properties or note content for structure.
+- New unclassified material goes into `00 Inbox/`.
+- Active work lives in `01 Projects/`.
+- Ongoing responsibilities live in `02 Areas/`.
+- Reusable reference material lives in `03 Resources/`.
+- Finished or inactive material moves to `04 Archive/`.
+- Shared operating docs live in `90 Ops/`.
+- Templates live in `91 Templates/`.
+- Dashboard and index notes live in `92 Dashboards/`.
+- Attachments and exported media live in `93 Attachments/`.
+
+## Project Standard
+
+Each active project should usually have one folder under `01 Projects/` with this structure:
+
+- `project.md`
+- `tasks.md`
+- `log.md`
+- `decisions.md`
+- `meetings/`
+- `artifacts/`
+
+Do not invent a new structure unless the project clearly needs it.
+
+## Work Pattern
+
+When working on a project:
+
+1. Update `project.md` for scope, status, current focus, and key links.
+2. Update `tasks.md` for actionable next steps.
+3. Append to `log.md` for meaningful progress.
+4. Record durable decisions in `decisions.md`.
+5. Put meeting notes in `meetings/`.
+
+## Note Hygiene
+
+- Prefer one canonical note per thing.
+- Avoid creating multiple competing task lists for the same project.
+- Use links between notes instead of duplicating text.
+- Keep logs append-only unless cleanup is clearly safe.
+- Archive stale or completed work instead of deleting it.
+
+## Properties
+
+Use these properties where relevant:
+
+- `type`
+- `status`
+- `owner`
+- `project`
+- `area`
+- `next_review`
+- `created`
+- `updated`
+- `tags`
+
+## Default Behavior
+
+- If unsure where something goes, put it in `00 Inbox/`.
+- If creating a new project, start from the project template or the standard project structure.
+- If cleaning up, reduce duplication and improve clarity without changing meaning.
+
+## Recurring Review
+
+- Recurring review and away-from-user check-in behavior lives in `HEARTBEAT.md`.
+- Keep recurring review lightweight and quiet by default.
+- Use recurring review to keep active work moving and project state resumable.
+- Do not use recurring review for noisy churn or major unsupervised work.
+TEMPLATE
+}
+
+_content_heartbeat_md() { cat <<'TEMPLATE'
+# HEARTBEAT.md
+
+Use this file to define how the system should do lightweight recurring review when the user is away.
+
+The exact mechanism depends on the runtime:
+
+- OpenClaw can use a native heartbeat mechanism.
+- Other runtimes can use this file as the source-of-truth policy for scheduled or manual recurring review.
+
+## Default Intent
+
+On each recurring check-in:
+
+- review active projects
+- look for missing next actions
+- notice blockers or stale work
+- keep the vault easy to resume
+
+## Guidelines
+
+- Be quiet by default.
+- Prefer lightweight review over deep work.
+- Only interrupt the user when there is a blocker, decision, approval boundary, or time-sensitive issue.
+- Avoid noisy maintenance and repetitive edits.
+- Update durable notes only when it materially improves future work.
+TEMPLATE
+}
+
+_content_vault_home_md() { cat <<'TEMPLATE'
+# Vault Home
+
+Use this page as the main entry point for the vault.
+
+## Start Here
+
+- [[90 Ops/First Run]]
+- [[01 Projects/Agent Setup Tutorial/project]]
+- [[01 Projects/Agent Setup Tutorial/tasks]]
+
+## Core Areas
+
+- [[00 Inbox]]
+- [[01 Projects]]
+- [[02 Areas]]
+- [[03 Resources]]
+- [[04 Archive]]
+- [[90 Ops]]
+- [[91 Templates]]
+- [[92 Dashboards]]
+TEMPLATE
+}
+
+_tpl_claude_subagent() { cat <<'TEMPLATE'
+---
+name: __WORKFLOW_SLUG__
+description: Specialist for the __WORKFLOW_TITLE__ workflow. Use proactively when this workflow appears in the request or when the task needs structured execution from intake through handoff.
+model: inherit
+---
+
+You are the `__WORKFLOW_SLUG__` specialist for the `__WORKFLOW_TITLE__` workflow.
+
+Default approach:
+1. Clarify the concrete goal and constraints.
+2. Inspect the relevant project files, notes, and recent changes.
+3. Take the smallest correct next action.
+4. Surface blockers, dependencies, and decisions clearly.
+5. Leave durable notes or follow-up tasks when the workflow creates reusable knowledge.
+
+Operating rules:
+- Prefer specific, low-ambiguity next steps.
+- Do not claim work is complete until the result is verified.
+- Ask before destructive actions or actions that spend money.
+- Keep outputs concise, but explicit about tradeoffs and assumptions.
+TEMPLATE
+}
+
+_tpl_openclaw_agents() { cat <<'TEMPLATE'
+# AGENTS.md - __WORKFLOW_TITLE__
+
+## Role
+
+You are the `__WORKFLOW_SLUG__` specialist.
+Your job is to own the `__WORKFLOW_TITLE__` workflow from intake through handoff.
+
+## Shared Office
+
+Use `__VAULT_PATH__` as the shared office.
+Read the relevant project notes, operating docs, and recent logs before doing durable work.
+
+## Default Operating Sequence
+
+1. Restate the current task in concrete terms.
+2. Inspect the relevant notes, files, and external systems.
+3. Decide the safest next action.
+4. Make durable updates to the vault when decisions, status, or procedures change.
+5. Leave the workflow easier to resume than you found it.
+
+## Output Standard
+
+Prefer outputs that include:
+
+- current objective
+- assumptions and open questions
+- next actions
+- durable notes written back to the vault when useful
+
+## Boundaries
+
+- Do not invent access you do not have.
+- Ask before destructive or irreversible actions.
+- Do not create noisy notes for trivial work.
+TEMPLATE
+}
+
+_tpl_openclaw_bootstrap() { cat <<'TEMPLATE'
+# BOOTSTRAP.md - __WORKFLOW_TITLE__
+
+You are a new specialist workspace for the `__WORKFLOW_TITLE__` workflow.
+
+On first use:
+
+1. Ask the user what success looks like for this workflow.
+2. Confirm the systems involved.
+3. Confirm what should always be logged or updated.
+4. Confirm what should never happen without approval.
+5. Rewrite `AGENTS.md` so it reflects the real workflow instead of this starter version.
+TEMPLATE
+}
+
+_tpl_openclaw_heartbeat() { cat <<'TEMPLATE'
+# HEARTBEAT.md
+
+On each heartbeat, do a lightweight review for the `__WORKFLOW_TITLE__` workflow centered on the shared office:
+
+`__VAULT_PATH__`
+
+Primary goal:
+- keep this workflow moving
+- keep shared state clean enough that the next session can resume quickly
+
+Look for:
+- work with no clear next action
+- blocked or waiting items that need surfacing
+- stale workflow notes
+- obvious documentation gaps that would slow future sessions
+
+Guidelines:
+- Be quiet by default.
+- If nothing important needs action, do not create noise.
+- Prefer lightweight review over deep work.
+- Only message the user when human input is actually needed.
+TEMPLATE
+}
+
+_tpl_codex_skill() { cat <<'TEMPLATE'
+---
+name: __WORKFLOW_SLUG__
+description: Run the __WORKFLOW_TITLE__ workflow from intake through handoff. Use when the task matches this repeatable workflow and benefits from durable operating instructions.
+---
+
+# __WORKFLOW_TITLE__
+
+This skill specializes in the `__WORKFLOW_TITLE__` workflow.
+
+## First move
+
+1. Identify the concrete objective.
+2. Read the most relevant local context before acting.
+3. Decide whether the next step is planning, execution, validation, or handoff.
+
+## Default sequence
+
+1. Intake the request.
+2. Inspect the relevant files, tools, and dependencies.
+3. Execute the safest next step.
+4. Validate the outcome.
+5. Write back durable notes when the workflow teaches something reusable.
+
+## Output standard
+
+- clear objective
+- explicit assumptions
+- concrete next actions
+- validation status
+
+## Boundaries
+
+- Do not make irreversible changes without approval.
+- Do not skip validation when it is feasible.
+- Prefer simple, reproducible steps over clever shortcuts.
+TEMPLATE
+}
+
+_tpl_chatgpt_gpt() { cat <<'TEMPLATE'
+# __WORKFLOW_TITLE__ GPT
+
+## Name
+
+__WORKFLOW_TITLE__
+
+## Description
+
+Assistant for the `__WORKFLOW_TITLE__` workflow. Helps the user move from intake to decision to action with clear next steps and durable summaries.
+
+## Instructions
+
+You are a specialist assistant for the `__WORKFLOW_TITLE__` workflow.
+
+Your job is to:
+
+1. Clarify the user's concrete objective.
+2. Ask only for the missing context needed to move forward.
+3. Break the work into the smallest useful next actions.
+4. Keep outputs concise, structured, and practical.
+5. End with a clear recommendation, checklist, or handoff.
+
+Rules:
+
+- Prefer concrete next steps over broad theory.
+- State assumptions when context is missing.
+- Ask before irreversible, risky, or expensive actions.
+- When a workflow produces reusable knowledge, summarize it in a way the user can store in their system.
+
+## Conversation Starters
+
+- Help me run my `__WORKFLOW_TITLE__` workflow.
+- Turn this rough request into a concrete action plan.
+- Summarize this work and tell me the next three steps.
+
+## Suggested Knowledge Files
+
+- SOPs
+- checklists
+- project summaries
+- glossary or taxonomy docs
+TEMPLATE
 }
 
 # ─────────────────────────────────────────────────────────────
@@ -534,15 +858,10 @@ for d in "${VAULT_DIRS[@]}"; do
   ensure_dir "$VAULT_DIR/$d"
 done
 
-# Copy static files from the installer package
-# Copy AGENTS.md as CLAUDE.md (Claude Code reads CLAUDE.md as its project instructions)
-[[ -f "$SCRIPT_DIR/AGENTS.md" ]] && cp "$SCRIPT_DIR/AGENTS.md" "$VAULT_DIR/CLAUDE.md"
-for f in HEARTBEAT.md "Vault Home.md"; do
-  [[ -f "$SCRIPT_DIR/$f" ]] && cp "$SCRIPT_DIR/$f" "$VAULT_DIR/$f"
-done
-
-# Copy templates so users can reference and modify them
-[[ -d "$TEMPLATES_DIR" ]] && cp -r "$TEMPLATES_DIR" "$VAULT_DIR/"
+# Write vault operating files from inline content
+_content_claude_md      > "$VAULT_DIR/CLAUDE.md"
+_content_heartbeat_md   > "$VAULT_DIR/HEARTBEAT.md"
+_content_vault_home_md  > "$VAULT_DIR/Vault Home.md"
 
 # Write .gitignore
 cat > "$VAULT_DIR/.gitignore" <<'GITIGNORE'
@@ -681,43 +1000,39 @@ for platform in "${SELECTED_PLATFORMS[@]}"; do
     agent_slug="${AGENT_SLUGS[$i]}"
     case "$platform" in
       "Claude Code")
-        if [[ -f "$TEMPLATES_DIR/claude-code/subagent.md.template" ]]; then
           write_from_template \
-            "$TEMPLATES_DIR/claude-code/subagent.md.template" \
+            _tpl_claude_subagent \
             "$VAULT_DIR/90 Ops/Agents/Claude Code/$agent_slug.md" \
             "$agent_name" "$agent_slug"
           cp "$VAULT_DIR/90 Ops/Agents/Claude Code/$agent_slug.md" \
              "$VAULT_DIR/.claude/agents/$agent_slug.md"
-        fi
-        ;;
+          ;;
       "OpenClaw")
-        if [[ -f "$TEMPLATES_DIR/openclaw/AGENTS.md.template" ]]; then
           write_from_template \
-            "$TEMPLATES_DIR/openclaw/AGENTS.md.template" \
+            _tpl_openclaw_agents \
             "$VAULT_DIR/90 Ops/Agents/OpenClaw/$agent_slug/AGENTS.md" \
             "$agent_name" "$agent_slug"
           write_from_template \
-            "$TEMPLATES_DIR/openclaw/BOOTSTRAP.md.template" \
+            _tpl_openclaw_bootstrap \
             "$VAULT_DIR/90 Ops/Agents/OpenClaw/$agent_slug/BOOTSTRAP.md" \
             "$agent_name" "$agent_slug"
-        fi
-        ;;
-      "Codex")
-        if [[ -f "$TEMPLATES_DIR/codex-skill/SKILL.md.template" ]]; then
           write_from_template \
-            "$TEMPLATES_DIR/codex-skill/SKILL.md.template" \
+            _tpl_openclaw_heartbeat \
+            "$VAULT_DIR/90 Ops/Agents/OpenClaw/$agent_slug/HEARTBEAT.md" \
+            "$agent_name" "$agent_slug"
+          ;;
+      "Codex")
+          write_from_template \
+            _tpl_codex_skill \
             "$VAULT_DIR/90 Ops/Agents/Codex/$agent_slug/SKILL.md" \
             "$agent_name" "$agent_slug"
-        fi
-        ;;
+          ;;
       "ChatGPT")
-        if [[ -f "$TEMPLATES_DIR/chatgpt/custom-gpt.md.template" ]]; then
           write_from_template \
-            "$TEMPLATES_DIR/chatgpt/custom-gpt.md.template" \
+            _tpl_chatgpt_gpt \
             "$VAULT_DIR/90 Ops/Agents/ChatGPT/$agent_slug.md" \
             "$agent_name" "$agent_slug"
-        fi
-        ;;
+          ;;
     esac
   done
 done
