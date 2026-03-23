@@ -87,7 +87,9 @@ multiselect() {
     local key seq
     IFS= read -rsn1 key
     if [[ "$key" == $'\x1b' ]]; then
-      IFS= read -rsn2 -t 0.1 seq || seq=""
+      local seq1 seq2
+      IFS= read -rsn1 seq1; IFS= read -rsn1 seq2
+      seq="$seq1$seq2"
       case "$seq" in
         '[A') ((_ms_cursor > 0)) && ((_ms_cursor--)) || true ;;
         '[B') ((_ms_cursor < _ms_count - 1)) && ((_ms_cursor++)) || true ;;
@@ -125,15 +127,6 @@ multiselect() {
 # Utilities
 # ─────────────────────────────────────────────────────────────
 
-slugify() {
-  printf '%s' "$1" \
-    | tr '[:upper:]' '[:lower:]' \
-    | sed 's/[^a-z0-9]/-/g' \
-    | sed 's/-\{2,\}/-/g' \
-    | sed 's/^-//' \
-    | sed 's/-$//'
-}
-
 trim() { printf '%s' "$1" | sed 's/^[[:space:]]*//' | sed 's/[[:space:]]*$//'; }
 
 ensure_dir() { mkdir -p "$1"; }
@@ -146,19 +139,8 @@ append_task() {
   printf -- "- [ ] %s\n" "$2" >> "$1"
 }
 
-write_from_template() {
-  local tpl_fn="$1" target_path="$2" agent_title="$3" agent_slug="$4"
-  ensure_dir "$(dirname "$target_path")"
-  "$tpl_fn" | sed \
-    -e "s|__WORKFLOW_TITLE__|$(escape_sed "$agent_title")|g" \
-    -e "s|__WORKFLOW_SLUG__|$(escape_sed "$agent_slug")|g" \
-    -e "s|__USER_NAME__|$(escape_sed "$USER_NAME")|g" \
-    -e "s|__VAULT_PATH__|$(escape_sed "$VAULT_DIR")|g" \
-    > "$target_path"
-}
-
 # ─────────────────────────────────────────────────────────────
-# Inline file content
+# Inline vault file content
 # ─────────────────────────────────────────────────────────────
 
 _content_claude_md() { cat <<'TEMPLATE'
@@ -296,191 +278,6 @@ Use this page as the main entry point for the vault.
 TEMPLATE
 }
 
-_tpl_claude_subagent() { cat <<'TEMPLATE'
----
-name: __WORKFLOW_SLUG__
-description: Specialist for the __WORKFLOW_TITLE__ workflow. Use proactively when this workflow appears in the request or when the task needs structured execution from intake through handoff.
-model: inherit
----
-
-You are the `__WORKFLOW_SLUG__` specialist for the `__WORKFLOW_TITLE__` workflow.
-
-Default approach:
-1. Clarify the concrete goal and constraints.
-2. Inspect the relevant project files, notes, and recent changes.
-3. Take the smallest correct next action.
-4. Surface blockers, dependencies, and decisions clearly.
-5. Leave durable notes or follow-up tasks when the workflow creates reusable knowledge.
-
-Operating rules:
-- Prefer specific, low-ambiguity next steps.
-- Do not claim work is complete until the result is verified.
-- Ask before destructive actions or actions that spend money.
-- Keep outputs concise, but explicit about tradeoffs and assumptions.
-TEMPLATE
-}
-
-_tpl_openclaw_agents() { cat <<'TEMPLATE'
-# AGENTS.md - __WORKFLOW_TITLE__
-
-## Role
-
-You are the `__WORKFLOW_SLUG__` specialist.
-Your job is to own the `__WORKFLOW_TITLE__` workflow from intake through handoff.
-
-## Shared Office
-
-Use `__VAULT_PATH__` as the shared office.
-Read the relevant project notes, operating docs, and recent logs before doing durable work.
-
-## Default Operating Sequence
-
-1. Restate the current task in concrete terms.
-2. Inspect the relevant notes, files, and external systems.
-3. Decide the safest next action.
-4. Make durable updates to the vault when decisions, status, or procedures change.
-5. Leave the workflow easier to resume than you found it.
-
-## Output Standard
-
-Prefer outputs that include:
-
-- current objective
-- assumptions and open questions
-- next actions
-- durable notes written back to the vault when useful
-
-## Boundaries
-
-- Do not invent access you do not have.
-- Ask before destructive or irreversible actions.
-- Do not create noisy notes for trivial work.
-TEMPLATE
-}
-
-_tpl_openclaw_bootstrap() { cat <<'TEMPLATE'
-# BOOTSTRAP.md - __WORKFLOW_TITLE__
-
-You are a new specialist workspace for the `__WORKFLOW_TITLE__` workflow.
-
-On first use:
-
-1. Ask the user what success looks like for this workflow.
-2. Confirm the systems involved.
-3. Confirm what should always be logged or updated.
-4. Confirm what should never happen without approval.
-5. Rewrite `AGENTS.md` so it reflects the real workflow instead of this starter version.
-TEMPLATE
-}
-
-_tpl_openclaw_heartbeat() { cat <<'TEMPLATE'
-# HEARTBEAT.md
-
-On each heartbeat, do a lightweight review for the `__WORKFLOW_TITLE__` workflow centered on the shared office:
-
-`__VAULT_PATH__`
-
-Primary goal:
-- keep this workflow moving
-- keep shared state clean enough that the next session can resume quickly
-
-Look for:
-- work with no clear next action
-- blocked or waiting items that need surfacing
-- stale workflow notes
-- obvious documentation gaps that would slow future sessions
-
-Guidelines:
-- Be quiet by default.
-- If nothing important needs action, do not create noise.
-- Prefer lightweight review over deep work.
-- Only message the user when human input is actually needed.
-TEMPLATE
-}
-
-_tpl_codex_skill() { cat <<'TEMPLATE'
----
-name: __WORKFLOW_SLUG__
-description: Run the __WORKFLOW_TITLE__ workflow from intake through handoff. Use when the task matches this repeatable workflow and benefits from durable operating instructions.
----
-
-# __WORKFLOW_TITLE__
-
-This skill specializes in the `__WORKFLOW_TITLE__` workflow.
-
-## First move
-
-1. Identify the concrete objective.
-2. Read the most relevant local context before acting.
-3. Decide whether the next step is planning, execution, validation, or handoff.
-
-## Default sequence
-
-1. Intake the request.
-2. Inspect the relevant files, tools, and dependencies.
-3. Execute the safest next step.
-4. Validate the outcome.
-5. Write back durable notes when the workflow teaches something reusable.
-
-## Output standard
-
-- clear objective
-- explicit assumptions
-- concrete next actions
-- validation status
-
-## Boundaries
-
-- Do not make irreversible changes without approval.
-- Do not skip validation when it is feasible.
-- Prefer simple, reproducible steps over clever shortcuts.
-TEMPLATE
-}
-
-_tpl_chatgpt_gpt() { cat <<'TEMPLATE'
-# __WORKFLOW_TITLE__ GPT
-
-## Name
-
-__WORKFLOW_TITLE__
-
-## Description
-
-Assistant for the `__WORKFLOW_TITLE__` workflow. Helps the user move from intake to decision to action with clear next steps and durable summaries.
-
-## Instructions
-
-You are a specialist assistant for the `__WORKFLOW_TITLE__` workflow.
-
-Your job is to:
-
-1. Clarify the user's concrete objective.
-2. Ask only for the missing context needed to move forward.
-3. Break the work into the smallest useful next actions.
-4. Keep outputs concise, structured, and practical.
-5. End with a clear recommendation, checklist, or handoff.
-
-Rules:
-
-- Prefer concrete next steps over broad theory.
-- State assumptions when context is missing.
-- Ask before irreversible, risky, or expensive actions.
-- When a workflow produces reusable knowledge, summarize it in a way the user can store in their system.
-
-## Conversation Starters
-
-- Help me run my `__WORKFLOW_TITLE__` workflow.
-- Turn this rough request into a concrete action plan.
-- Summarize this work and tell me the next three steps.
-
-## Suggested Knowledge Files
-
-- SOPs
-- checklists
-- project summaries
-- glossary or taxonomy docs
-TEMPLATE
-}
 
 # ─────────────────────────────────────────────────────────────
 # MCP config builders
@@ -495,32 +292,6 @@ mcp_add_atlassian() {
     }')
 }
 
-mcp_add_notion() {
-  MCP_ENTRIES+=('    "Notion": {
-      "type": "http",
-      "url": "https://mcp.notion.com/mcp"
-    }')
-}
-
-mcp_add_salesforce() {
-  local org_alias="$1"
-  MCP_ENTRIES+=("    \"Salesforce\": {
-      \"command\": \"npx\",
-      \"args\": [\"-y\", \"@salesforce/mcp\", \"--orgs\", \"$org_alias\", \"--toolsets\", \"orgs,metadata,data,users\"]
-    }")
-}
-
-mcp_add_slack() {
-  local bot_token="$1" team_id="$2"
-  MCP_ENTRIES+=("    \"Slack\": {
-      \"command\": \"npx\",
-      \"args\": [\"-y\", \"@modelcontextprotocol/server-slack\"],
-      \"env\": {
-        \"SLACK_BOT_TOKEN\": \"$bot_token\",
-        \"SLACK_TEAM_ID\": \"$team_id\"
-      }
-    }")
-}
 
 mcp_add_github() {
   local token="$1"
@@ -563,60 +334,6 @@ setup_atlassian() {
   echo "Atlassian added."
 }
 
-setup_notion() {
-  echo "Notion connects via OAuth."
-  echo "When Claude first uses this tool it will prompt you to authenticate"
-  echo "through your browser. No token needed right now."
-  echo
-  mcp_add_notion
-  echo "Notion added."
-}
-
-setup_salesforce() {
-  echo "Salesforce uses the Salesforce CLI to connect to your org."
-  echo
-
-  if ! command_exists sf && ! command_exists sfdx; then
-    echo "Salesforce CLI not found on this machine."
-    echo "Install it from: https://developer.salesforce.com/tools/salesforcecli"
-    echo
-    if ! prompt_yes_no "Configure Salesforce anyway (you can authenticate the CLI later)?" "y"; then
-      echo "Skipping Salesforce."
-      return
-    fi
-  else
-    echo "Salesforce CLI found. Authenticated orgs:"
-    sf org list --json 2>/dev/null \
-      | grep '"alias"' \
-      | sed 's/.*"alias": "\(.*\)".*/  - \1/' \
-      || echo "  (none — run 'sf org login web' to authenticate)"
-    echo
-  fi
-
-  local org_alias
-  org_alias="$(prompt_required "Org alias to connect (e.g. production, staging, dev)")"
-  mcp_add_salesforce "$org_alias"
-  echo "Salesforce added with org: $org_alias"
-}
-
-setup_slack() {
-  echo "Slack requires a Bot Token from a Slack app you create."
-  echo
-  echo "Steps:"
-  echo "  1. Go to https://api.slack.com/apps → Create New App → From scratch"
-  echo "  2. Under OAuth & Permissions, add these Bot Token Scopes:"
-  echo "       channels:history  channels:read  chat:write"
-  echo "       groups:read  im:read  mpim:read  users:read"
-  echo "  3. Click 'Install to Workspace'"
-  echo "  4. Copy the Bot User OAuth Token (starts with xoxb-)"
-  echo "  5. Find your Team ID in workspace settings (starts with T)"
-  echo
-  local bot_token team_id
-  bot_token="$(prompt_secret "Slack Bot Token (xoxb-...)")"
-  team_id="$(prompt_required "Slack Team ID (T...)")"
-  mcp_add_slack "$bot_token" "$team_id"
-  echo "Slack added."
-}
 
 setup_github() {
   echo "GitHub requires a Personal Access Token."
@@ -738,61 +455,7 @@ if [[ -d "$VAULT_DIR" ]]; then
   fi
 fi
 
-# ── Step 3: Platform selection ────────────
-
-section "Agent Platforms"
-cat <<'MSG'
-Choose which AI platforms you want your agents deployed to.
-Arrow keys to move, space to select, enter to confirm.
-MSG
-echo
-
-PLATFORM_OPTIONS=("Claude Code" "OpenClaw" "Codex" "ChatGPT")
-SELECTED_PLATFORMS=()
-multiselect SELECTED_PLATFORMS "${PLATFORM_OPTIONS[@]}"
-
-if [[ ${#SELECTED_PLATFORMS[@]} -eq 0 ]]; then
-  echo "No platforms selected — defaulting to Claude Code."
-  SELECTED_PLATFORMS=("Claude Code")
-fi
-echo "Selected: ${SELECTED_PLATFORMS[*]}"
-
-# ── Step 4: Agents ────────────────────────
-
-section "Your Agents"
-cat <<'MSG'
-Let's create your first agents. Each one handles a specific,
-repeatable type of task — one job, done consistently.
-
-Think of something like: "every time we finish a sprint, I need
-to pull together a stakeholder update from Jira and summarize
-what shipped, what slipped, and why" — that's a great candidate
-for an agent.
-MSG
-echo
-
-AGENT_NAMES=()
-AGENT_SLUGS=()
-AGENT_SUMMARIES=()
-
-while true; do
-  agent_num=$((${#AGENT_NAMES[@]} + 1))
-  echo "── Agent $agent_num"
-  agent_name="$(prompt_required "Agent name (e.g. 'Post-call summary', 'Weekly pipeline review')")"
-  agent_summary="$(prompt_required "What does this agent help you with?")"
-  AGENT_NAMES+=("$agent_name")
-  AGENT_SLUGS+=("$(slugify "$agent_name")")
-  AGENT_SUMMARIES+=("$agent_summary")
-  echo
-  if [[ ${#AGENT_NAMES[@]} -ge 1 ]]; then
-    if ! prompt_yes_no "Add another agent?" "n"; then
-      break
-    fi
-    echo
-  fi
-done
-
-# ── Step 5: Tool selection ────────────────
+# ── Step 3: Tool selection ────────────────
 
 section "Connected Tools"
 cat <<'MSG'
@@ -803,16 +466,13 @@ echo
 
 TOOL_OPTIONS=(
   "Atlassian (Jira + Confluence)"
-  "Notion"
-  "Salesforce"
-  "Slack"
   "GitHub"
 )
 SELECTED_TOOLS=()
 multiselect SELECTED_TOOLS "${TOOL_OPTIONS[@]}"
 echo "Selected: ${SELECTED_TOOLS[*]:-none}"
 
-# ── Step 6: Tool setup wizards ────────────
+# ── Step 4: Tool setup wizards ────────────
 
 if [[ ${#SELECTED_TOOLS[@]} -gt 0 ]]; then
   section "Tool Setup"
@@ -824,16 +484,13 @@ if [[ ${#SELECTED_TOOLS[@]} -gt 0 ]]; then
     echo
     case "$tool" in
       "Atlassian (Jira + Confluence)") setup_atlassian ;;
-      "Notion")                        setup_notion ;;
-      "Salesforce")                    setup_salesforce ;;
-      "Slack")                         setup_slack ;;
       "GitHub")                        setup_github ;;
     esac
     echo
   done
 fi
 
-# ── Step 7: Create vault structure ────────
+# ── Step 5: Create vault structure ────────
 
 section "Creating Vault"
 echo "Building vault at: $VAULT_DIR"
@@ -845,25 +502,19 @@ VAULT_DIRS=(
   "02 Areas"
   "03 Resources"
   "04 Archive"
-  "90 Ops/Agents/Claude Code"
-  "90 Ops/Agents/OpenClaw"
-  "90 Ops/Agents/Codex"
-  "90 Ops/Agents/ChatGPT"
+  "90 Ops"
   "91 Templates"
   "92 Dashboards"
   "93 Attachments"
-  ".claude/agents"
 )
 for d in "${VAULT_DIRS[@]}"; do
   ensure_dir "$VAULT_DIR/$d"
 done
 
-# Write vault operating files from inline content
 _content_claude_md      > "$VAULT_DIR/CLAUDE.md"
 _content_heartbeat_md   > "$VAULT_DIR/HEARTBEAT.md"
 _content_vault_home_md  > "$VAULT_DIR/Vault Home.md"
 
-# Write .gitignore
 cat > "$VAULT_DIR/.gitignore" <<'GITIGNORE'
 # MCP config may contain credentials — do not commit
 .mcp.json
@@ -878,20 +529,17 @@ cat > "$VAULT_DIR/.gitignore" <<'GITIGNORE'
 *.csr
 GITIGNORE
 
-# ── Step 8: Write .mcp.json ───────────────
+# ── Step 6: Write .mcp.json ───────────────
 
 write_mcp_json
 if [[ ${#MCP_ENTRIES[@]} -gt 0 ]]; then
   echo ".mcp.json written (gitignored — contains your credentials)"
 fi
 
-# ── Step 9: Generate vault documents ──────
+# ── Step 7: Generate vault documents ──────
 
 TUTORIAL_DIR="$VAULT_DIR/01 Projects/Agent Setup Tutorial"
 ensure_dir "$TUTORIAL_DIR"
-
-PLATFORM_LIST=""
-for p in "${SELECTED_PLATFORMS[@]}"; do PLATFORM_LIST+="- $p"$'\n'; done
 
 TOOL_LIST=""
 if [[ ${#SELECTED_TOOLS[@]} -gt 0 ]]; then
@@ -907,15 +555,8 @@ cat > "$VAULT_DIR/90 Ops/First Run.md" <<EOF
 
 This vault is the shared working space for $USER_NAME and their agents.
 
-It holds active projects, reference material, agent configurations,
-and the connections to the tools your workflows depend on.
-
-## Agent Platforms
-
-$PLATFORM_LIST
-## Agents
-
-$(for i in "${!AGENT_NAMES[@]}"; do printf '%d. **%s** — %s\n' "$((i+1))" "${AGENT_NAMES[$i]}" "${AGENT_SUMMARIES[$i]}"; done)
+It holds active projects, reference material, and the connections
+to the tools your workflows depend on.
 
 ## Connected Tools
 
@@ -938,19 +579,11 @@ owner: $USER_NAME
 
 Get the vault working end-to-end for $USER_NAME.
 
-## Platforms
-
-$PLATFORM_LIST
-## Agents
-
-$(for i in "${!AGENT_NAMES[@]}"; do printf -- '- **%s**: %s\n' "${AGENT_NAMES[$i]}" "${AGENT_SUMMARIES[$i]}"; done)
-
 ## Done when
 
-- At least one workflow agent is tested and working
 - At least one tool connection is verified
 - The vault is committed to Git
-- The next real project has been started
+- The first real project has been started
 EOF
 
 cat > "$TUTORIAL_DIR/tasks.md" <<EOF
@@ -970,16 +603,14 @@ if [[ ${#SELECTED_TOOLS[@]} -gt 0 ]]; then
   done
 fi
 
-printf '\n## First workflow\n\n' >> "$TUTORIAL_DIR/tasks.md"
-append_task "$TUTORIAL_DIR/tasks.md" "Run a real task through the '${AGENT_NAMES[0]}' agent."
-append_task "$TUTORIAL_DIR/tasks.md" "Note anything the agent needed but didn't have."
-append_task "$TUTORIAL_DIR/tasks.md" "Create the next real project in \`01 Projects/\`."
+printf '\n## Get started\n\n' >> "$TUTORIAL_DIR/tasks.md"
+append_task "$TUTORIAL_DIR/tasks.md" "Create the first real project in \`01 Projects/\`."
+append_task "$TUTORIAL_DIR/tasks.md" "Run a real task with your agent and note what it needed but didn't have."
 
 cat > "$TUTORIAL_DIR/log.md" <<EOF
 # Log
 
 - $(date +%Y-%m-%d): Vault initialized for $USER_NAME.
-  Platforms: ${SELECTED_PLATFORMS[*]}
   Tools: ${SELECTED_TOOLS[*]:-none}
 EOF
 
@@ -987,57 +618,10 @@ cat > "$TUTORIAL_DIR/decisions.md" <<EOF
 # Decisions
 
 - Vault created at: $VAULT_DIR
-- Platforms: ${SELECTED_PLATFORMS[*]}
 - Tools: ${SELECTED_TOOLS[*]:-none}
-- Agents defined: $(IFS=', '; echo "${AGENT_NAMES[*]}")
 EOF
 
-# ── Step 10: Generate agent files ─────────
-
-for platform in "${SELECTED_PLATFORMS[@]}"; do
-  for i in "${!AGENT_NAMES[@]}"; do
-    agent_name="${AGENT_NAMES[$i]}"
-    agent_slug="${AGENT_SLUGS[$i]}"
-    case "$platform" in
-      "Claude Code")
-          write_from_template \
-            _tpl_claude_subagent \
-            "$VAULT_DIR/90 Ops/Agents/Claude Code/$agent_slug.md" \
-            "$agent_name" "$agent_slug"
-          cp "$VAULT_DIR/90 Ops/Agents/Claude Code/$agent_slug.md" \
-             "$VAULT_DIR/.claude/agents/$agent_slug.md"
-          ;;
-      "OpenClaw")
-          write_from_template \
-            _tpl_openclaw_agents \
-            "$VAULT_DIR/90 Ops/Agents/OpenClaw/$agent_slug/AGENTS.md" \
-            "$agent_name" "$agent_slug"
-          write_from_template \
-            _tpl_openclaw_bootstrap \
-            "$VAULT_DIR/90 Ops/Agents/OpenClaw/$agent_slug/BOOTSTRAP.md" \
-            "$agent_name" "$agent_slug"
-          write_from_template \
-            _tpl_openclaw_heartbeat \
-            "$VAULT_DIR/90 Ops/Agents/OpenClaw/$agent_slug/HEARTBEAT.md" \
-            "$agent_name" "$agent_slug"
-          ;;
-      "Codex")
-          write_from_template \
-            _tpl_codex_skill \
-            "$VAULT_DIR/90 Ops/Agents/Codex/$agent_slug/SKILL.md" \
-            "$agent_name" "$agent_slug"
-          ;;
-      "ChatGPT")
-          write_from_template \
-            _tpl_chatgpt_gpt \
-            "$VAULT_DIR/90 Ops/Agents/ChatGPT/$agent_slug.md" \
-            "$agent_name" "$agent_slug"
-          ;;
-    esac
-  done
-done
-
-# ── Step 11: Git / GitHub ─────────────────
+# ── Step 8: Git / GitHub ─────────────────
 
 section "Git Setup"
 setup_git
