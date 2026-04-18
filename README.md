@@ -1,44 +1,57 @@
 # Agent Vault Template
 
-A starter vault plus guided setup flow for building a personal AI working environment.
+A starter vault for building a personal AI working environment with Claude Code.
 
-This repository gives users:
+## Setup
 
-- a blank vault structure
-- a first-run installer
-- a root operating contract and recurring-review policy
-- platform-aware agent templates for OpenClaw, Claude Code, Codex-style skills, and ChatGPT custom GPTs
-- a tutorial project that helps them connect the systems they actually use
-- a post-setup Git and GitHub bootstrap flow
-
-## Recommended Setup
-
-Run the installer in Terminal:
+Clone this repo, then run the installer:
 
 ```bash
 ./install.sh
 ```
 
-The installer will:
-
-- explain what the vault is for
-- ask which agent platform(s) the user wants to use
-- initialize Git and create the first commit
-- optionally create or connect a GitHub repo after setup, with existing-repo selection via `gh` when available
-- create a tutorial project for connecting tools and finishing setup
+No prompts. The vault is created at `~/Documents/agent-vault`.
 
 ## What Gets Created
 
-- core vault folders
-- `90 Ops/First Run.md`
-- `90 Ops/Service Map.md`
-- `01 Projects/Agent Setup Tutorial/`
-- `90 Ops/Agents/` with source templates for the chosen platforms
-- optional live installs for Claude Code, OpenClaw, and Codex-compatible skills
+```
+~/Documents/agent-vault/
+  00 Inbox/
+  01 Projects/
+  02 Areas/
+  03 Resources/
+  04 Archive/
+  90 Ops/Agents/Claude Code/
+  91 Templates/
+  92 Dashboards/
+  93 Attachments/
+  .claude/agents/
+  .mcp.json          ← placeholder MCP config (gitignored)
+  .gitignore
+  CLAUDE.md
+  HEARTBEAT.md
+```
 
-## Platform Notes
+## MCP Configuration
 
-- OpenClaw: workspace-oriented `AGENTS.md` scaffolds
-- Claude Code: `.claude/agents/*.md` subagents with YAML frontmatter
-- Codex: skill folders containing `SKILL.md`
-- ChatGPT: custom GPT builder instructions and conversation starters
+`.mcp.json` is written with placeholder entries for **Atlassian**, **Slack**, and **GitHub**.
+
+- **Atlassian** uses OAuth — no token needed. A browser window opens on first use.
+- **Slack** requires a bot token (`SLACK_BOT_TOKEN`) and team ID (`SLACK_TEAM_ID`).
+- **GitHub** requires a personal access token (`GITHUB_PERSONAL_ACCESS_TOKEN`).
+
+Fill in the values before using those tools. The file is gitignored so credentials stay local.
+
+## Vault Structure
+
+| Folder | Purpose |
+|--------|---------|
+| `00 Inbox/` | Unclassified incoming material |
+| `01 Projects/` | Active project folders |
+| `02 Areas/` | Ongoing responsibilities |
+| `03 Resources/` | Reusable reference material |
+| `04 Archive/` | Finished or inactive work |
+| `90 Ops/` | Agent configs and operating docs |
+| `91 Templates/` | Reusable templates |
+
+Each project folder follows the same shape: `project.md`, `tasks.md`, `log.md`, `decisions.md`, `meetings/`, `artifacts/`.
